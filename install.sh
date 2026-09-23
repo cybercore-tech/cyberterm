@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Install cyberterm from the latest GitHub release.
 #
-#   curl -fsSL https://raw.githubusercontent.com/darkstardevx/cyberterm/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/cybercore-tech/cyberterm/main/install.sh | sh
 #
 # Supported: Linux (x86_64, aarch64) and macOS (aarch64 / Apple Silicon).
 # Linux needs the usual desktop GL/X11/Wayland libraries already present
@@ -10,7 +10,7 @@
 # capacity is currently too degraded to build one reliably in CI.
 set -eu
 
-REPO="darkstardevx/cyberterm"
+REPO="cybercore-tech/cyberterm"
 INSTALL_DIR="${CYBERTERM_INSTALL_DIR:-$HOME/.local/bin}"
 
 die() {
