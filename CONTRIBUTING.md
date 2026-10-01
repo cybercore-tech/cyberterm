@@ -4,7 +4,7 @@
 
 Cyberterm is a single bin crate, not a workspace, so this gate is a scaled-
 down version of the multi-crate one used elsewhere in this org (see
-[diagprint](https://github.com/darkstardevx/diagprint) for the full
+[diagprint](https://github.com/cybercore-tech/diagprint) for the full
 workspace/MSRV-matrix version): no per-package arrays, no publish step (a
 terminal emulator binary isn't published to crates.io), and no pinned-MSRV
 re-run (that matters for a *library* other people compile with their own

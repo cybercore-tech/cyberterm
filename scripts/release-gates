@@ -2,7 +2,7 @@
 # Quality gate for cyberterm.
 #
 # Scaled down from the multi-crate workspace version of this script (see
-# diagprint, https://github.com/darkstardevx/diagprint) since cyberterm is a
+# diagprint, https://github.com/cybercore-tech/diagprint) since cyberterm is a
 # single bin crate, not a workspace: no per-package `packages`/`root_features`
 # arrays, no publish mode (a terminal emulator binary isn't published to
 # crates.io), and no pinned-MSRV re-run (that matters for a library other
