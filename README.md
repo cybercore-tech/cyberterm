@@ -96,4 +96,4 @@ THE SOFTWARE IS PROVIDED "AS-IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 All software components, tools, prefixes, and configurations under the "Cyber" prefix within this ecosystem are developed completely independently as open-source utilities for specialized terminal environments. They maintain absolutely no affiliation, partnership, endorsement, sponsorship, or commercial connection with any external corporate cybersecurity providers, training collectives, or federal defense contractors. Prior art is formally registered and maintained immutably via active domain publication.
 
-**Contact:** [cybercore.sh+cyberterm@gmail.com](mailto:cybercore.sh+cyberterm@gmail.com) // [cybercore-tech.github.io](https://cybercore-tech.github.io/)
+**Contact:** [dev@cybercoretech.net](mailto:dev@cybercoretech.net) // [cybercore-tech.github.io](https://cybercore-tech.github.io/)
