@@ -33,9 +33,6 @@ impl ThemeRegistry {
         let catalog = cybercore::theme::ThemeCatalog::load().ok()?;
         let active = catalog.active_id().to_string();
         for (id, entry) in catalog.iter() {
-            if self.themes.iter().any(|theme| theme.name == id) {
-                continue;
-            }
             let palette = entry.document.palette_for(catalog.active_appearance());
             let slots = [
                 &palette.bg,
@@ -60,7 +57,7 @@ impl ThemeRegistry {
             for (index, value) in raw_colors.iter().enumerate() {
                 colors[index] = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
             }
-            self.themes.push(Theme {
+            let theme = Theme {
                 name: id.to_string(),
                 author: entry.document.metadata.author.clone(),
                 category: entry.document.metadata.family.clone(),
@@ -69,7 +66,12 @@ impl ThemeRegistry {
                 cursor: format!("#{}", palette.acid_green),
                 colors,
                 raw_colors,
-            });
+            };
+            if let Some(existing) = self.themes.iter_mut().find(|theme| theme.name == id) {
+                *existing = theme;
+            } else {
+                self.themes.push(theme);
+            }
         }
         self.themes.sort_by(|a, b| a.name.cmp(&b.name));
         Some(active)

@@ -24,6 +24,7 @@ use alacritty_terminal::Term;
 use clipboard::ClipboardManager;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use theme::{Theme, ThemeRegistry};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, WindowEvent};
@@ -112,6 +113,7 @@ struct CybertermApp {
     config_root: PathBuf,
     cyber_config: config::CyberConfig,
     _tab_manager: tabs::TabContainer,
+    last_shared_theme_check: Instant,
 }
 
 impl CybertermApp {
@@ -123,6 +125,22 @@ impl CybertermApp {
 }
 
 impl ApplicationHandler<TermEvent> for CybertermApp {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        let now = Instant::now();
+        if now.duration_since(self.last_shared_theme_check) >= Duration::from_secs(2) {
+            self.last_shared_theme_check = now;
+            if let Some(active) = self.theme_menu.registry.append_cybercore_themes() {
+                if let Some(index) = self.theme_menu.registry.themes.iter().position(|theme| theme.name == active) {
+                    self.theme_menu.registry.selected_index = index;
+                    let theme = self.theme_menu.registry.themes[index].clone();
+                    self.apply_theme(&theme);
+                    if let Some(backend) = &self.backend { backend.window.request_redraw(); }
+                }
+            }
+        }
+        event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_secs(2)));
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.backend.is_some() {
             return;
@@ -827,7 +845,8 @@ fn main() {
         .or_else(|| registry.themes.first())
         .cloned();
 
-    let event_proxy = event_loop.create_proxy();
+        let event_proxy = event_loop.create_proxy();
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(2)));
 
     let mut app = CybertermApp {
         backend: None,
@@ -845,8 +864,9 @@ fn main() {
         current_mods: ModifiersState::empty(),
         themes_directory: themes_dir,
         config_root,
-        cyber_config,
-        _tab_manager: tabs::TabContainer::new(),
+            cyber_config,
+            _tab_manager: tabs::TabContainer::new(),
+            last_shared_theme_check: Instant::now(),
     };
 
     if let Some(theme) = initial_theme {

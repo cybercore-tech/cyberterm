@@ -58,6 +58,9 @@ catalog, so compatible Cybercore apps follow that selection too. Light/dark
 appearance variants use the catalog's current shared appearance. Cyberterm
 pins the Cybercore Git revision that introduced `ThemeCatalog`; update that
 pin when consuming a later published Cybercore release with the same API.
+While Cyberterm is running, it refreshes the shared catalog every two seconds,
+so changes from Theme Studio or another Cybercore app update its active palette
+and theme picker without a restart.
 
 ## ⚙️ Rendering
 
