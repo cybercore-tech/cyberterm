@@ -29,45 +29,11 @@ pub fn handle_arguments(
             let filter = args.get(2).map(|s| s.as_str()).unwrap_or("--all");
             println!("🌐 CYBERTERM THEMES CATALOG [{}]", filter.to_uppercase());
             println!("──────────────────────────────────────────────");
-
             let themes_dir = config_root.join("themes");
-
-            // Recursively dig through Category -> Folder -> Variant JSON Files
-            if let Ok(categories) = fs::read_dir(themes_dir) {
-                for cat_entry in categories.flatten() {
-                    if cat_entry.path().is_dir() {
-                        let cat_name = cat_entry.file_name().to_string_lossy().into_owned();
-
-                        if let Ok(sub_folders) = fs::read_dir(cat_entry.path()) {
-                            for folder_entry in sub_folders.flatten() {
-                                if folder_entry.path().is_dir() {
-                                    let folder_name =
-                                        folder_entry.file_name().to_string_lossy().into_owned();
-
-                                    if let Ok(files) = fs::read_dir(folder_entry.path()) {
-                                        for file_entry in files.flatten() {
-                                            let file_path = file_entry.path();
-                                            if file_path.is_file()
-                                                && file_path
-                                                    .extension()
-                                                    .is_some_and(|e| e == "json")
-                                            {
-                                                let variant_name = file_path
-                                                    .file_stem()
-                                                    .unwrap()
-                                                    .to_string_lossy();
-                                                println!(
-                                                    "  ➔ {} ➔ {} ➔ ⚡ {}",
-                                                    cat_name, folder_name, variant_name
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+            let mut registry = crate::theme::ThemeRegistry::load_from_dir(themes_dir);
+            registry.append_cybercore_themes();
+            for theme in registry.themes {
+                println!("  {} [{}]", theme.name, theme.category);
             }
             CliAction::ExitCleanly
         }
@@ -80,7 +46,8 @@ pub fn handle_arguments(
             // category/folder/variant JSON hierarchy this command used to
             // target (which the registry no longer scans).
             let themes_dir = config_root.join("themes");
-            let registry = crate::theme::ThemeRegistry::load_from_dir(&themes_dir);
+            let mut registry = crate::theme::ThemeRegistry::load_from_dir(&themes_dir);
+            registry.append_cybercore_themes();
 
             let print_available = || {
                 println!("🎨 Available themes:");
@@ -97,6 +64,11 @@ pub fn handle_arguments(
                         println!("✨ Saved theme selection to config.");
                     } else {
                         eprintln!("❌ Error updating configuration.");
+                    }
+                    if cybercore::theme::ThemeCatalog::load()
+                        .is_ok_and(|mut catalog| catalog.select(name).is_ok())
+                    {
+                        println!("🌐 Saved selection to the shared CYBERGRID catalog.");
                     }
                 }
                 Some(name) => {

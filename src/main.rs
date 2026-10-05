@@ -785,9 +785,6 @@ fn menu_to_cells(
 }
 
 fn main() {
-    let event_loop = EventLoop::<TermEvent>::with_user_event().build().unwrap();
-    event_loop.set_control_flow(ControlFlow::Wait);
-
     let themes_dir = match config::initialize_cyberterm_directories() {
         Ok(base_path) => base_path.join("themes"),
         Err(e) => {
@@ -811,6 +808,9 @@ fn main() {
     ) {
         return;
     }
+
+    let event_loop = EventLoop::<TermEvent>::with_user_event().build().unwrap();
+    event_loop.set_control_flow(ControlFlow::Wait);
 
     let mut registry = ThemeRegistry::load_from_dir(&themes_dir);
     let shared_active = registry.append_cybercore_themes();
