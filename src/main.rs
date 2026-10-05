@@ -114,6 +114,7 @@ struct CybertermApp {
     cyber_config: config::CyberConfig,
     _tab_manager: tabs::TabContainer,
     last_shared_theme_check: Instant,
+    last_shared_theme_revision: u64,
 }
 
 impl CybertermApp {
@@ -127,18 +128,32 @@ impl CybertermApp {
 impl ApplicationHandler<TermEvent> for CybertermApp {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
-        if now.duration_since(self.last_shared_theme_check) >= Duration::from_secs(2) {
+        if now.duration_since(self.last_shared_theme_check) >= Duration::from_secs(1) {
             self.last_shared_theme_check = now;
-            if let Some(active) = self.theme_menu.registry.append_cybercore_themes() {
-                if let Some(index) = self.theme_menu.registry.themes.iter().position(|theme| theme.name == active) {
-                    self.theme_menu.registry.selected_index = index;
-                    let theme = self.theme_menu.registry.themes[index].clone();
-                    self.apply_theme(&theme);
-                    if let Some(backend) = &self.backend { backend.window.request_redraw(); }
+            if let Ok(catalog) = cybercore::theme::ThemeCatalog::load() {
+                let revision = catalog.revision();
+                if revision != self.last_shared_theme_revision {
+                    self.last_shared_theme_revision = revision;
+                    if let Some(active) = self.theme_menu.registry.append_cybercore_themes() {
+                        if let Some(index) = self
+                            .theme_menu
+                            .registry
+                            .themes
+                            .iter()
+                            .position(|theme| theme.name == active)
+                        {
+                            self.theme_menu.registry.selected_index = index;
+                            let theme = self.theme_menu.registry.themes[index].clone();
+                            self.apply_theme(&theme);
+                            if let Some(backend) = &self.backend {
+                                backend.window.request_redraw();
+                            }
+                        }
+                    }
                 }
             }
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_secs(2)));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(now + Duration::from_secs(1)));
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -832,6 +847,9 @@ fn main() {
 
     let mut registry = ThemeRegistry::load_from_dir(&themes_dir);
     let shared_active = registry.append_cybercore_themes();
+    let shared_revision = cybercore::theme::ThemeCatalog::load()
+        .map(|catalog| catalog.revision())
+        .unwrap_or_default();
     let initial_theme = registry
         .themes
         .iter()
@@ -845,8 +863,10 @@ fn main() {
         .or_else(|| registry.themes.first())
         .cloned();
 
-        let event_proxy = event_loop.create_proxy();
-        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + Duration::from_secs(2)));
+    let event_proxy = event_loop.create_proxy();
+    event_loop.set_control_flow(ControlFlow::WaitUntil(
+        Instant::now() + Duration::from_secs(1),
+    ));
 
     let mut app = CybertermApp {
         backend: None,
@@ -864,9 +884,10 @@ fn main() {
         current_mods: ModifiersState::empty(),
         themes_directory: themes_dir,
         config_root,
-            cyber_config,
-            _tab_manager: tabs::TabContainer::new(),
-            last_shared_theme_check: Instant::now(),
+        cyber_config,
+        _tab_manager: tabs::TabContainer::new(),
+        last_shared_theme_check: Instant::now(),
+        last_shared_theme_revision: shared_revision,
     };
 
     if let Some(theme) = initial_theme {

@@ -56,11 +56,9 @@ slots; Cyberterm's local Kitty and JSON themes remain available in the same
 picker. Choosing a shared theme saves the selection to the shared Cybercore
 catalog, so compatible Cybercore apps follow that selection too. Light/dark
 appearance variants use the catalog's current shared appearance. Cyberterm
-pins the Cybercore Git revision that introduced `ThemeCatalog`; update that
-pin when consuming a later published Cybercore release with the same API.
-While Cyberterm is running, it refreshes the shared catalog every two seconds,
-so changes from Theme Studio or another Cybercore app update its active palette
-and theme picker without a restart.
+uses the published `cybercore` 0.8 crate. While running, it checks the shared
+catalog revision once a second and reloads themes only when the catalog changes,
+so updates from Theme Studio or another Cybercore app apply without a restart.
 
 ## ⚙️ Rendering
 
