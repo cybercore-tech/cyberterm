@@ -1,6 +1,4 @@
-# Remove Cargo.lock from gitignore if creating an executable, leave it for libraries
-# More information here https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
-Cargo.lock
+# Cargo.lock is tracked because Cyberterm is an executable.
 
 ### Universal ###
 # Common files that should be ignored in all projects
@@ -80,5 +78,4 @@ rustc-ice-*.txt
 .vscode/sftp.json
 .vscode/tags
 .devcontainer/
-
 
