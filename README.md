@@ -50,6 +50,15 @@ the theme registry reads both shapes at startup. Press `Ctrl+Shift+T` in
 the terminal itself to open the same theme picker without leaving the
 session.
 
+Cyberterm also loads the shared Cybercore theme catalog. Its semantic
+background, foreground, and accent colors map to the terminal's 16 ANSI
+slots; Cyberterm's local Kitty and JSON themes remain available in the same
+picker. Choosing a shared theme saves the selection to the shared Cybercore
+catalog, so compatible Cybercore apps follow that selection too. Light/dark
+appearance variants use the catalog's current shared appearance. Cyberterm
+pins the Cybercore Git revision that introduced `ThemeCatalog`; update that
+pin when consuming a later published Cybercore release with the same API.
+
 ## ⚙️ Rendering
 
 Text is drawn by `glyphon` (cosmic-text shaping + etagere glyph atlas) on

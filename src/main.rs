@@ -558,6 +558,11 @@ impl CybertermApp {
                 {
                     self.cyber_config.theme = theme.name.clone();
                     let _ = config::save_config(&self.config_root, &self.cyber_config);
+                    if cybercore::theme::ThemeCatalog::load()
+                        .is_ok_and(|mut catalog| catalog.select(&theme.name).is_ok())
+                    {
+                        // Shared selection now drives Cyberterm and the other Cybercore apps.
+                    }
                 }
                 self.theme_menu.is_open = false;
             }
@@ -807,11 +812,18 @@ fn main() {
         return;
     }
 
-    let registry = ThemeRegistry::load_from_dir(&themes_dir);
+    let mut registry = ThemeRegistry::load_from_dir(&themes_dir);
+    let shared_active = registry.append_cybercore_themes();
     let initial_theme = registry
         .themes
         .iter()
-        .find(|t| t.name == cyber_config.theme)
+        .find(|t| Some(t.name.as_str()) == shared_active.as_deref())
+        .or_else(|| {
+            registry
+                .themes
+                .iter()
+                .find(|t| t.name == cyber_config.theme)
+        })
         .or_else(|| registry.themes.first())
         .cloned();
 

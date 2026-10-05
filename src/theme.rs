@@ -27,6 +27,54 @@ pub struct ThemeRegistry {
 }
 
 impl ThemeRegistry {
+    /// Append shared CYBERGRID themes, adapting semantic colors to ANSI slots.
+    /// Existing Kitty and Cyberterm-local themes stay available alongside them.
+    pub fn append_cybercore_themes(&mut self) -> Option<String> {
+        let catalog = cybercore::theme::ThemeCatalog::load().ok()?;
+        let active = catalog.active_id().to_string();
+        for (id, entry) in catalog.iter() {
+            if self.themes.iter().any(|theme| theme.name == id) {
+                continue;
+            }
+            let palette = entry.document.palette_for(catalog.active_appearance());
+            let slots = [
+                &palette.bg,
+                &palette.red,
+                &palette.acid_green,
+                &palette.orange,
+                &palette.purple,
+                &palette.hot_pink,
+                &palette.cyan,
+                &palette.white,
+                &palette.muted,
+                &palette.red,
+                &palette.acid_green,
+                &palette.orange,
+                &palette.purple,
+                &palette.hot_pink,
+                &palette.cyan,
+                &palette.white,
+            ];
+            let raw_colors: Vec<String> = slots.iter().map(|color| format!("#{color}")).collect();
+            let mut colors = [0u32; 16];
+            for (index, value) in raw_colors.iter().enumerate() {
+                colors[index] = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
+            }
+            self.themes.push(Theme {
+                name: id.to_string(),
+                author: entry.document.metadata.author.clone(),
+                category: entry.document.metadata.family.clone(),
+                background: format!("#{}", palette.bg),
+                foreground: format!("#{}", palette.white),
+                cursor: format!("#{}", palette.acid_green),
+                colors,
+                raw_colors,
+            });
+        }
+        self.themes.sort_by(|a, b| a.name.cmp(&b.name));
+        Some(active)
+    }
+
     /// Loads every theme this box actually has, in both real shapes that
     /// exist on disk:
     /// 1. Flat `*.conf` files directly in `base_dir` -- real Kitty terminal
