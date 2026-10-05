@@ -22,4 +22,4 @@ arboard = "3"                   # Clipboard access (moved in from the removed pt
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
 serde_json = "1.0.150"
-cybercore = { git = "https://github.com/cybercore-tech/cybercore", rev = "614a5864cac14b43996e5fe7c003a93a8d5f1dad" }
+cybercore = "0.7"

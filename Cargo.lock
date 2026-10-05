@@ -452,8 +452,9 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "cybercore"
-version = "0.6.0"
-source = "git+https://github.com/cybercore-tech/cybercore?rev=614a5864cac14b43996e5fe7c003a93a8d5f1dad#614a5864cac14b43996e5fe7c003a93a8d5f1dad"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4db9933c531f01590356bfaf08651993177d132228ce5993253ccf8fb9228683"
 dependencies = [
  "serde",
  "serde_json",
