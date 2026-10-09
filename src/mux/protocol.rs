@@ -149,6 +149,9 @@ pub struct ShellInfo {
     pub last_exit: Option<i32>,
     pub command_running: bool,
     pub prompts: u64,
+    /// Command blocks (see `shell::BlockMeta`), so windows can draw them.
+    #[serde(default)]
+    pub blocks: Vec<crate::shell::BlockMeta>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

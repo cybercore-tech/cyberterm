@@ -87,6 +87,25 @@ inactive_dim = 0.25
 # type into and arrange panes). Read at startup.
 enabled = true
 
+[blocks]
+# A colored bar beside each command (green ok, red failed, yellow running)
+# plus its exit code and duration. Needs shell integration.
+decorations = true
+
+[history]
+# Save every finished command with its output (secrets redacted) to a
+# searchable database: `cyberterm +history <words>`. Needs shell
+# integration. Commands typed with a leading space are never saved.
+enabled = true
+max_output_kb = 256
+# Regexes for command lines not to save, e.g. ["^pass ", "vault"]
+ignore = []
+
+[notify]
+# Notify when a command that ran this long finishes while you're elsewhere
+# (another window, tab or pane). 0 turns it off.
+long_command_seconds = 10
+
 [daemon]
 # Keep shells in a background session daemon: closing (or crashing) the
 # window only detaches, and `cyberterm` / `cyberterm +attach` brings your

@@ -197,6 +197,19 @@ fn remove_stale_sockets(dir: &Path) {
             .and_then(|s| s.to_str())
             .and_then(|s| s.parse::<u32>().ok());
         let is_sock = path.extension().is_some_and(|x| x == "sock");
+        // Diff/pager temp files: block-<pid>-<pane>-<mark>-{a,b}.txt
+        let block_pid = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix("block-"))
+            .and_then(|rest| rest.split('-').next())
+            .and_then(|p| p.parse::<u32>().ok());
+        if let Some(pid) = block_pid {
+            if !Path::new(&format!("/proc/{pid}")).exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+            continue;
+        }
         if let (true, Some(pid)) = (is_sock, pid) {
             if !Path::new(&format!("/proc/{pid}")).exists() {
                 let _ = std::fs::remove_file(&path);

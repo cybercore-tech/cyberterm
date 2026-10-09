@@ -26,6 +26,8 @@ use alacritty_terminal::event::{OnResize, WindowSize};
 use alacritty_terminal::tty::{self, ChildEvent, EventedPty, EventedReadWrite};
 use parking_lot::Mutex;
 use polling::{Event, PollMode, Poller};
+use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 
 /// URI scheme of the hidden prompt marks.
 pub const MARK_SCHEME: &str = "cyberterm-mark:";
@@ -38,6 +40,57 @@ pub struct ShellState {
     pub command_running: bool,
     /// Prompts drawn so far; non-zero means shell integration is active.
     pub prompts: u64,
+    /// One entry per prompt (newest last, capped), keyed by the id of the
+    /// prompt's mark on the grid. Prompts that never ran a command (an
+    /// empty Enter, a redraw) have no `command`.
+    pub blocks: VecDeque<BlockMeta>,
+}
+
+/// What shell integration said about one command.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockMeta {
+    /// The prompt mark's id (`cyberterm-prompt-<mark>`).
+    pub mark: u64,
+    pub command: Option<String>,
+    pub cwd: Option<PathBuf>,
+    /// Milliseconds since the Unix epoch.
+    pub started_ms: Option<u64>,
+    pub finished_ms: Option<u64>,
+    pub exit: Option<i32>,
+    /// Saved to the history database already.
+    pub recorded: bool,
+}
+
+impl BlockMeta {
+    pub fn is_command(&self) -> bool {
+        self.command
+            .as_deref()
+            .is_some_and(|c| !c.trim().is_empty())
+    }
+
+    pub fn running(&self) -> bool {
+        self.started_ms.is_some() && self.finished_ms.is_none()
+    }
+
+    /// How long it ran (or has been running).
+    pub fn duration_ms(&self) -> Option<u64> {
+        let start = self.started_ms?;
+        Some(
+            self.finished_ms
+                .unwrap_or_else(now_ms)
+                .saturating_sub(start),
+        )
+    }
+}
+
+/// Blocks remembered per pane.
+const MAX_BLOCKS: usize = 1000;
+
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 /// Longest OSC payload buffered while deciding/collecting; anything longer
@@ -176,6 +229,15 @@ impl OscTap {
                 shell.prompts += 1;
                 shell.command_running = false;
                 self.next_mark += 1;
+                let cwd = shell.cwd.clone();
+                shell.blocks.push_back(BlockMeta {
+                    mark: self.next_mark,
+                    cwd,
+                    ..BlockMeta::default()
+                });
+                while shell.blocks.len() > MAX_BLOCKS {
+                    shell.blocks.pop_front();
+                }
                 let exit = shell.last_exit.map(|e| e.to_string()).unwrap_or_default();
                 out.extend_from_slice(
                     format!(
@@ -189,10 +251,35 @@ impl OscTap {
             "C" => {
                 shell.command_running = true;
                 out.extend_from_slice(b"\x1b]8;;\x1b\\");
+                // `cmdline_url=` (ours, percent-encoded) or kitty's
+                // `cmdline=`.
+                let command = fields.find_map(|f| {
+                    f.strip_prefix("cmdline_url=")
+                        .map(percent_decode)
+                        .or_else(|| f.strip_prefix("cmdline=").map(str::to_string))
+                });
+                let cwd = shell.cwd.clone();
+                let mark = self.next_mark;
+                if let Some(block) = shell.blocks.back_mut().filter(|b| b.mark == mark) {
+                    block.command = command.filter(|c| !c.trim().is_empty());
+                    block.started_ms = Some(now_ms());
+                    if cwd.is_some() {
+                        block.cwd = cwd;
+                    }
+                }
             }
             "D" => {
                 shell.command_running = false;
                 shell.last_exit = fields.next().and_then(|f| f.trim().parse().ok());
+                let (mark, exit) = (self.next_mark, shell.last_exit);
+                if let Some(block) = shell
+                    .blocks
+                    .back_mut()
+                    .filter(|b| b.mark == mark && b.started_ms.is_some() && b.finished_ms.is_none())
+                {
+                    block.finished_ms = Some(now_ms());
+                    block.exit = exit;
+                }
             }
             _ => {}
         }
@@ -367,6 +454,24 @@ mod tests {
         assert_eq!(state.last_exit, Some(2));
         assert_eq!(state.prompts, 1);
         assert!(!state.command_running);
+    }
+
+    #[test]
+    fn blocks_record_command_cwd_timing_and_exit() {
+        let (_, state) = run(&[
+            b"\x1b]7;file://h/srv\x07\x1b]133;A\x07$ \x1b]133;B\x07",
+            b"\x1b]133;C;cmdline_url=make%20test\x07out\x1b]133;D;3\x07",
+            b"\x1b]133;A\x07$ \x1b]133;B\x07",
+        ]);
+        assert_eq!(state.blocks.len(), 2);
+        let b = &state.blocks[0];
+        assert_eq!(b.mark, 1);
+        assert_eq!(b.command.as_deref(), Some("make test"));
+        assert_eq!(b.cwd, Some(PathBuf::from("/srv")));
+        assert_eq!(b.exit, Some(3));
+        assert!(b.is_command() && !b.running() && b.duration_ms().is_some());
+        // The newest prompt hasn't run anything yet.
+        assert!(!state.blocks[1].is_command());
     }
 
     #[test]

@@ -15,7 +15,7 @@ end
 __cyberterm_report_pwd
 
 function __cyberterm_preexec --on-event fish_preexec
-    printf '\e]133;C\a'
+    printf '\e]133;C;cmdline_url=%s\a' (string escape --style=url -- "$argv")
 end
 
 function __cyberterm_postexec --on-event fish_postexec

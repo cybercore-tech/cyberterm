@@ -42,7 +42,10 @@ _cyberterm_precmd() {
 }
 
 _cyberterm_preexec() {
-  printf '\e]133;C\a'
+  # The command line rides along so Cyberterm can label, rerun and
+  # search the block without guessing where the prompt ends.
+  _cyberterm_urlencode "$1"
+  printf '\e]133;C;cmdline_url=%s\a' "$REPLY"
   _cyberterm_running=1
 }
 

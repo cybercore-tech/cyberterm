@@ -104,6 +104,10 @@ impl App {
                     bell_unseen: false,
                     title: info.title.clone(),
                     pending_command: None,
+                    // Don't notify about commands that finished while
+                    // detached.
+                    notified_mark: info.shell.blocks.iter().map(|b| b.mark).max().unwrap_or(0),
+                    block_sig: (0, None),
                 });
             }
         }

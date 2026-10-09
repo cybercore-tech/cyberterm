@@ -74,6 +74,11 @@ tested automatically:
       saved layout format (`src/mux/layout_doc.rs`); the terminal attach
       client's key/mouse parsing, OSC 52 encoding and mode mirroring
       (`src/tty_client.rs`)
+- [x] Command blocks: block metadata from OSC 133 (`src/shell/tap.rs`),
+      block geometry from prompt marks incl. multi-row prompts, wrapped
+      commands and scrollback (`src/blocks.rs`); history storage, FTS
+      search, previous-run lookup, secret redaction, output capping and
+      record-once collection (`src/history.rs`)
 - [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 
