@@ -529,72 +529,32 @@ impl TermRenderer {
                 self.ensure_coverage(cell.ch);
             }
         }
-        let mut segments = Vec::new();
-        let mut run: Option<(usize, Vec<(String, Style8)>)> = None;
-        let family = Family::Monospace;
-        let metrics = self.metrics;
-        let ligatures = self.font.ligatures;
-        let fs = &mut self.font_system;
-
-        let flush = |run: &mut Option<(usize, Vec<(String, Style8)>)>,
-                     segments: &mut Vec<Segment>,
-                     fs: &mut FontSystem| {
-            if let Some((col, spans)) = run.take() {
-                if spans.iter().all(|(t, _)| t.trim().is_empty()) {
-                    return;
-                }
-                let shaping = if ligatures {
-                    Shaping::Advanced
-                } else {
-                    Shaping::Basic
-                };
-                segments.push(Segment {
-                    col,
-                    buffer: make_buffer(fs, metrics, family, &spans, shaping),
-                });
-            }
+        let shaping_for_runs = if self.font.ligatures {
+            Shaping::Advanced
+        } else {
+            Shaping::Basic
         };
-
-        for (col, cell) in cells.iter().enumerate() {
-            if cell.is_spacer() {
-                continue;
-            }
-            if boxdraw::is_drawn(cell.ch) {
-                // Drawn as rectangles in `decorations`.
-                flush(&mut run, &mut segments, fs);
-                continue;
-            }
-            let style = Style8::of(cell);
-            let simple = cell.ch.is_ascii()
-                && !cell.ch.is_ascii_control()
-                && cell.zerowidth.is_none()
-                && !cell.flags.contains(Flags::WIDE_CHAR);
-            if simple {
-                if cell.ch == ' ' && run.is_none() {
-                    continue;
+        segment_row(cells)
+            .into_iter()
+            .map(|seg| {
+                let shaping = if seg.plain_ascii {
+                    shaping_for_runs
+                } else {
+                    Shaping::Advanced
+                };
+                Segment {
+                    col: seg.col,
+                    buffer: make_buffer(
+                        &mut self.font_system,
+                        self.metrics,
+                        Family::Monospace,
+                        &seg.text,
+                        seg.style,
+                        shaping,
+                    ),
                 }
-                let (_, spans) = run.get_or_insert_with(|| (col, Vec::new()));
-                match spans.last_mut() {
-                    Some((text, s)) if *s == style => text.push(cell.ch),
-                    _ => spans.push((cell.ch.to_string(), style)),
-                }
-            } else {
-                flush(&mut run, &mut segments, fs);
-                let mut text = cell.ch.to_string();
-                if let Some(extra) = &cell.zerowidth {
-                    text.extend(extra.iter());
-                }
-                if text.trim().is_empty() || cell.ch.is_control() {
-                    continue;
-                }
-                segments.push(Segment {
-                    col,
-                    buffer: make_buffer(fs, metrics, family, &[(text, style)], Shaping::Advanced),
-                });
-            }
-        }
-        flush(&mut run, &mut segments, fs);
-        segments
+            })
+            .collect()
     }
 
     fn decorations(&self, quads: &mut Quads, cells: &[RenderCell], ox: f32, y: f32) {
@@ -698,7 +658,7 @@ impl TermRenderer {
 }
 
 /// The text attributes that change shaping or glyph color.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 struct Style8 {
     fg: [u8; 3],
     bold: bool,
@@ -730,30 +690,110 @@ fn make_buffer(
     fs: &mut FontSystem,
     metrics: Metrics,
     family: Family<'_>,
-    spans: &[(String, Style8)],
+    text: &str,
+    style: Style8,
     shaping: Shaping,
 ) -> Buffer {
     let mut buffer = Buffer::new(fs, metrics);
     buffer.set_size(fs, None, None);
-    let attrs = |s: &Style8| {
-        Attrs::new()
-            .family(family)
-            .weight(if s.bold { Weight::BOLD } else { Weight::NORMAL })
-            .style(if s.italic {
-                Style::Italic
-            } else {
-                Style::Normal
-            })
-            .color(GlyphonColor::rgb(s.fg[0], s.fg[1], s.fg[2]))
-    };
-    buffer.set_rich_text(
-        fs,
-        spans.iter().map(|(text, s)| (text.as_str(), attrs(s))),
-        Attrs::new().family(family),
-        shaping,
-    );
+    let attrs = Attrs::new()
+        .family(family)
+        .weight(if style.bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        })
+        .style(if style.italic {
+            Style::Italic
+        } else {
+            Style::Normal
+        })
+        .color(GlyphonColor::rgb(style.fg[0], style.fg[1], style.fg[2]));
+    buffer.set_text(fs, text, attrs, shaping);
     buffer.shape_until_scroll(fs, false);
     buffer
+}
+
+/// One piece of a row to shape: a run of same-style plain ASCII, or a
+/// single other character (wide, emoji, icon, combining sequence).
+#[derive(Debug, PartialEq)]
+struct TextSegment {
+    col: usize,
+    text: String,
+    style: Style8,
+    plain_ascii: bool,
+}
+
+/// Splits a row into segments. Every segment has exactly one style:
+/// cosmic-text's Basic shaping applies the *first* span's color and
+/// weight to a whole multi-span buffer, so styles must never be mixed
+/// within one buffer.
+fn segment_row(cells: &[RenderCell]) -> Vec<TextSegment> {
+    let mut out: Vec<TextSegment> = Vec::new();
+    let mut run: Option<TextSegment> = None;
+    let flush = |run: &mut Option<TextSegment>, out: &mut Vec<TextSegment>| {
+        if let Some(mut seg) = run.take() {
+            let trimmed = seg.text.trim_end().len();
+            seg.text.truncate(trimmed);
+            if !seg.text.is_empty() {
+                out.push(seg);
+            }
+        }
+    };
+    for (col, cell) in cells.iter().enumerate() {
+        if cell.is_spacer() {
+            continue;
+        }
+        if boxdraw::is_drawn(cell.ch) {
+            // Drawn as rectangles in `decorations`.
+            flush(&mut run, &mut out);
+            continue;
+        }
+        let style = Style8::of(cell);
+        let plain = cell.ch.is_ascii()
+            && !cell.ch.is_ascii_control()
+            && cell.zerowidth.is_none()
+            && !cell.flags.contains(Flags::WIDE_CHAR);
+        if plain {
+            if let Some(seg) = &mut run {
+                if seg.style == style {
+                    seg.text.push(cell.ch);
+                    continue;
+                }
+                // A space can join any run: its color is invisible.
+                if cell.ch == ' ' {
+                    seg.text.push(' ');
+                    continue;
+                }
+            }
+            flush(&mut run, &mut out);
+            if cell.ch != ' ' {
+                run = Some(TextSegment {
+                    col,
+                    text: cell.ch.to_string(),
+                    style,
+                    plain_ascii: true,
+                });
+            }
+        } else {
+            flush(&mut run, &mut out);
+            let mut text = cell.ch.to_string();
+            if let Some(extra) = &cell.zerowidth {
+                text.extend(extra.iter());
+            }
+            if text.trim().is_empty() || cell.ch.is_control() {
+                continue;
+            }
+            out.push(TextSegment {
+                col,
+                text,
+                style,
+                plain_ascii: false,
+            });
+        }
+    }
+    flush(&mut run, &mut out);
+    out
 }
 
 fn quad_pipeline(
@@ -913,4 +953,60 @@ fn measure(font_system: &mut FontSystem, font: &FontSpec) -> (Metrics, f32, f32)
 /// without pulling in `bytemuck` for a handful of floats.
 fn pack_f32s(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell(ch: char, fg: u8) -> RenderCell {
+        RenderCell {
+            fg: [fg; 3],
+            ch,
+            ..RenderCell::blank([0; 3], [0; 3])
+        }
+    }
+
+    fn texts(cells: &[RenderCell]) -> Vec<(usize, String, u8)> {
+        segment_row(cells)
+            .into_iter()
+            .map(|s| (s.col, s.text, s.style.fg[0]))
+            .collect()
+    }
+
+    #[test]
+    fn style_changes_start_new_segments() {
+        // "Copy  Ctrl" with the hint in a different color.
+        let mut row: Vec<RenderCell> = "Copy  ".chars().map(|c| cell(c, 200)).collect();
+        row.extend("Ctrl".chars().map(|c| cell(c, 70)));
+        assert_eq!(
+            texts(&row),
+            vec![(0, "Copy".into(), 200), (6, "Ctrl".into(), 70)]
+        );
+    }
+
+    #[test]
+    fn spaces_join_runs_and_trailing_spaces_are_dropped() {
+        let row: Vec<RenderCell> = "  ab cd   ".chars().map(|c| cell(c, 1)).collect();
+        assert_eq!(texts(&row), vec![(2, "ab cd".into(), 1)]);
+    }
+
+    #[test]
+    fn wide_and_box_characters_are_separate() {
+        let mut row = vec![cell('a', 1), cell('界', 1)];
+        row[1].flags = Flags::WIDE_CHAR;
+        let mut spacer = cell(' ', 1);
+        spacer.flags = Flags::WIDE_CHAR_SPACER;
+        row.push(spacer);
+        row.extend([cell('b', 1), cell('─', 1), cell('c', 1)]);
+        assert_eq!(
+            texts(&row),
+            vec![
+                (0, "a".into(), 1),
+                (1, "界".into(), 1),
+                (3, "b".into(), 1),
+                (5, "c".into(), 1)
+            ]
+        );
+    }
 }

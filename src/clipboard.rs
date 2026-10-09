@@ -53,15 +53,20 @@ impl ClipboardManager {
         #[cfg(all(unix, not(target_os = "macos")))]
         if kind == Kind::Primary {
             use arboard::{LinuxClipboardKind, SetExtLinux};
-            let _ = self
+            if let Err(e) = self
                 .ctx
                 .set()
                 .clipboard(LinuxClipboardKind::Primary)
-                .text(text);
+                .text(text)
+            {
+                eprintln!("cyberterm: primary selection not set: {e}");
+            }
             return;
         }
         let _ = kind;
-        let _ = self.ctx.set_text(text);
+        if let Err(e) = self.ctx.set_text(text) {
+            eprintln!("cyberterm: clipboard not set: {e}");
+        }
     }
 
     pub fn get(&mut self, kind: Kind) -> Option<String> {

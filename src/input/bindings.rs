@@ -110,7 +110,10 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+c", "copy"),
     ("ctrl+shift+v", "paste"),
-    ("shift+insert", "paste_primary"),
+    // Ctrl+Insert / Shift+Insert are also what Omarchy's universal
+    // Super+C / Super+V send to the focused window.
+    ("ctrl+insert", "copy"),
+    ("shift+insert", "paste"),
     ("ctrl+shift+a", "select_all"),
     ("shift+page_up", "scroll_page_up"),
     ("shift+page_down", "scroll_page_down"),
@@ -229,7 +232,24 @@ fn function_key(n: u8) -> Option<NamedKey> {
 }
 
 pub struct Bindings {
-    entries: Vec<(Combo, Action)>,
+    /// Combo, action, and the combo as written (for menus and help).
+    entries: Vec<(Combo, Action, String)>,
+}
+
+/// `ctrl+shift+c` -> `Ctrl+Shift+C`, for display.
+fn pretty(combo: &str) -> String {
+    combo
+        .split('+')
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect(),
+                None => "+".to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("+")
+        .replace("++", "+")
 }
 
 impl Bindings {
@@ -238,10 +258,14 @@ impl Bindings {
     /// silently ignored.
     pub fn new(overrides: &BTreeMap<String, String>) -> (Self, Vec<String>) {
         let mut errors = Vec::new();
-        let mut entries: Vec<(Combo, Action)> = DEFAULT_BINDINGS
+        let mut entries: Vec<(Combo, Action, String)> = DEFAULT_BINDINGS
             .iter()
             .filter_map(|(combo, action)| {
-                Some((Combo::parse(combo).ok()?, action_by_name(action)?))
+                Some((
+                    Combo::parse(combo).ok()?,
+                    action_by_name(action)?,
+                    combo.to_string(),
+                ))
             })
             .collect();
 
@@ -253,12 +277,12 @@ impl Bindings {
                     continue;
                 }
             };
-            entries.retain(|(c, _)| *c != combo);
+            entries.retain(|(c, _, _)| *c != combo);
             if action_name == "none" {
                 continue;
             }
             match action_by_name(action_name) {
-                Some(action) => entries.push((combo, action)),
+                Some(action) => entries.push((combo, action, combo_text.clone())),
                 None => errors.push(format!("unknown action `{action_name}` for `{combo_text}`")),
             }
         }
@@ -268,8 +292,17 @@ impl Bindings {
     pub fn lookup(&self, logical: &Key, base: &Key, mods: ModifiersState) -> Option<Action> {
         self.entries
             .iter()
-            .find(|(combo, _)| combo.matches(logical, base, mods))
-            .map(|(_, a)| *a)
+            .find(|(combo, _, _)| combo.matches(logical, base, mods))
+            .map(|(_, a, _)| *a)
+    }
+
+    /// The first combo bound to `action`, formatted for display.
+    pub fn hint(&self, action: Action) -> String {
+        self.entries
+            .iter()
+            .find(|(_, a, _)| *a == action)
+            .map(|(_, _, text)| pretty(text))
+            .unwrap_or_default()
     }
 }
 
@@ -361,6 +394,28 @@ mod tests {
         assert!(Combo::parse("alt+f5").is_ok());
         assert!(Combo::parse("ctrl+f13").is_err());
         assert!(Combo::parse("ctrl+nonsense").is_err());
+    }
+
+    #[test]
+    fn omarchy_universal_copy_paste_keys_work() {
+        let (b, _) = Bindings::new(&BTreeMap::new());
+        let insert = Key::Named(NamedKey::Insert);
+        assert_eq!(
+            b.lookup(&insert, &insert, ModifiersState::CONTROL),
+            Some(Action::Copy)
+        );
+        assert_eq!(
+            b.lookup(&insert, &insert, ModifiersState::SHIFT),
+            Some(Action::Paste)
+        );
+    }
+
+    #[test]
+    fn hints_are_readable() {
+        let (b, _) = Bindings::new(&BTreeMap::new());
+        assert_eq!(b.hint(Action::Copy), "Ctrl+Shift+C");
+        assert_eq!(b.hint(Action::PastePrimary), "");
+        assert_eq!(pretty("ctrl++"), "Ctrl++");
     }
 
     #[test]

@@ -157,12 +157,52 @@ impl Default for ScrollbackConfig {
     }
 }
 
+/// Where a finished mouse selection is copied automatically.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase", try_from = "CopyOnSelectRaw")]
+pub enum CopyOnSelect {
+    Off,
+    /// The primary selection (middle-click paste).
+    Primary,
+    /// The regular clipboard (Ctrl+V / Super+V elsewhere).
+    Clipboard,
+    Both,
+}
+
+/// Older configs wrote `copy_on_select = true/false`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CopyOnSelectRaw {
+    Bool(bool),
+    Name(String),
+}
+
+impl TryFrom<CopyOnSelectRaw> for CopyOnSelect {
+    type Error = String;
+    fn try_from(raw: CopyOnSelectRaw) -> Result<Self, String> {
+        Ok(match raw {
+            CopyOnSelectRaw::Bool(true) => Self::Primary,
+            CopyOnSelectRaw::Bool(false) => Self::Off,
+            CopyOnSelectRaw::Name(n) => match n.as_str() {
+                "off" => Self::Off,
+                "primary" => Self::Primary,
+                "clipboard" => Self::Clipboard,
+                "both" => Self::Both,
+                other => {
+                    return Err(format!(
+                        "copy_on_select must be off, primary, clipboard or both, not `{other}`"
+                    ))
+                }
+            },
+        })
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct MouseConfig {
-    /// Copy a finished mouse selection to the primary selection
-    /// (middle-click paste). Ctrl+Shift+C still copies to the clipboard.
-    pub copy_on_select: bool,
+    /// Where finished mouse selections are copied automatically.
+    pub copy_on_select: CopyOnSelect,
     /// Hide the mouse pointer while typing until it moves again.
     pub hide_while_typing: bool,
 }
@@ -170,7 +210,7 @@ pub struct MouseConfig {
 impl Default for MouseConfig {
     fn default() -> Self {
         Self {
-            copy_on_select: true,
+            copy_on_select: CopyOnSelect::Primary,
             hide_while_typing: true,
         }
     }
@@ -677,6 +717,18 @@ mod tests {
         assert_eq!(cfg.cursor.style, CursorShapeConfig::Beam);
         assert_eq!(cfg.clipboard.osc52, Osc52Mode::CopyPaste);
         assert_eq!(cfg.keybindings["ctrl+shift+c"], "none");
+    }
+
+    #[test]
+    fn copy_on_select_accepts_old_booleans_and_new_names() {
+        let parse = |v: &str| {
+            toml::from_str::<CyberConfig>(&format!("[mouse]\ncopy_on_select = {v}\n"))
+                .map(|c| c.mouse.copy_on_select)
+        };
+        assert_eq!(parse("true").unwrap(), CopyOnSelect::Primary);
+        assert_eq!(parse("false").unwrap(), CopyOnSelect::Off);
+        assert_eq!(parse("\"both\"").unwrap(), CopyOnSelect::Both);
+        assert!(parse("\"sometimes\"").is_err());
     }
 
     #[test]

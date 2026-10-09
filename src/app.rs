@@ -28,7 +28,7 @@ use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 use crate::clipboard::{ClipboardManager, Kind as ClipKind};
-use crate::config::{self, CursorShapeConfig, CyberConfig, Osc52Mode};
+use crate::config::{self, CopyOnSelect, CursorShapeConfig, CyberConfig, Osc52Mode};
 use crate::frame::{self, CursorOptions, Frame, FrameOptions, Palette};
 use crate::input::bindings::{Action, Bindings};
 use crate::input::keyboard::{self, KeyInput, KeyMode, KeyState};
@@ -38,6 +38,7 @@ use crate::session::{GridSize, PaneId, Session, SpawnOptions, UserEvent};
 use crate::shell;
 use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
+use crate::ui::context_menu;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const BELL_FLASH: Duration = Duration::from_millis(150);
@@ -83,6 +84,22 @@ struct HoverLink {
     uri: String,
 }
 
+/// What a context-menu entry does.
+#[derive(Clone, Debug)]
+enum MenuAction {
+    Do(Action),
+    OpenLink(String),
+    CopyText(String),
+}
+
+/// An open right-click menu, anchored at a cell of the focused pane.
+struct ContextMenu {
+    row: usize,
+    col: usize,
+    items: Vec<(context_menu::Item, MenuAction)>,
+    hover: Option<usize>,
+}
+
 #[derive(Default)]
 struct MouseState {
     pos: PhysicalPosition<f64>,
@@ -124,6 +141,7 @@ pub struct App {
     blink_visible: bool,
     blink_last: Instant,
     ime_preedit: Option<String>,
+    menu: Option<ContextMenu>,
     /// Physical keys consumed by a keybinding, so their release (reported
     /// under the Kitty protocol) doesn't leak to the program either.
     suppressed: HashSet<PhysicalKey>,
@@ -169,6 +187,7 @@ impl App {
             blink_visible: true,
             blink_last: Instant::now(),
             ime_preedit: None,
+            menu: None,
             suppressed: HashSet::new(),
             last_poll: Instant::now(),
             shared_theme_revision,
@@ -397,6 +416,12 @@ impl App {
             return;
         }
 
+        if self.menu.is_some() && state != KeyState::Release && self.on_menu_key(&event.logical_key)
+        {
+            self.request_redraw();
+            return;
+        }
+
         if state == KeyState::Release && self.suppressed.remove(&event.physical_key) {
             return;
         }
@@ -610,6 +635,18 @@ impl App {
             return;
         };
 
+        if let (Some(menu), Some(layout)) = (&self.menu, self.menu_layout()) {
+            let hover = context_menu::item_at(&layout, menu.items.len(), row, col)
+                .filter(|&i| menu.items[i].0.enabled);
+            if hover != menu.hover {
+                if let Some(menu) = &mut self.menu {
+                    menu.hover = hover;
+                }
+                self.request_redraw();
+            }
+            return;
+        }
+
         if let Some(mode) = self.reporting_mouse() {
             let held = self.mouse.reported_button;
             if mode.reports_motion(held.is_some())
@@ -734,6 +771,15 @@ impl App {
             return;
         };
         let pressed = state == ElementState::Pressed;
+
+        if self.menu.is_some() {
+            if pressed {
+                self.on_menu_click(button, row, col);
+                self.request_redraw();
+            }
+            return;
+        }
+
         let report_button = match button {
             MouseButton::Left => mouse::Button::Left,
             MouseButton::Middle => mouse::Button::Middle,
@@ -761,6 +807,12 @@ impl App {
                     }
                 }
                 if !inside {
+                    return;
+                }
+                if self.mods.shift_key() && self.extend_existing_selection(row, col, side) {
+                    self.mouse.selecting = true;
+                    self.mouse.anchor = None;
+                    self.request_redraw();
                     return;
                 }
                 let now = Instant::now();
@@ -796,32 +848,25 @@ impl App {
                 self.mouse.selecting = true;
             }
             (MouseButton::Left, false) => {
+                let was_selecting = self.mouse.selecting && self.mouse.anchor.is_none();
                 self.mouse.selecting = false;
                 self.mouse.anchor = None;
-                if self.config.mouse.copy_on_select {
-                    self.copy_selection(ClipKind::Primary);
+                if was_selecting {
+                    self.copy_on_select();
                 }
             }
             (MouseButton::Middle, true) => self.paste_from(ClipKind::Primary),
-            (MouseButton::Right, true) => {
-                // Extend an existing selection to the pointer.
-                if let Some(pane) = self.focused_pane() {
-                    let mut term = pane.session.term.lock();
-                    let point = frame::viewport_to_point(row, col, term.grid().display_offset());
-                    if let Some(sel) = &mut term.selection {
-                        sel.update(point, side);
-                    }
-                }
-                if self.config.mouse.copy_on_select {
-                    self.copy_selection(ClipKind::Primary);
-                }
-            }
+            (MouseButton::Right, true) => self.open_menu(row, col),
             _ => {}
         }
         self.request_redraw();
     }
 
     fn on_wheel(&mut self, delta: MouseScrollDelta) {
+        if self.menu.take().is_some() {
+            self.request_redraw();
+            return;
+        }
         let cell_height = self
             .gpu
             .as_ref()
@@ -878,6 +923,197 @@ impl App {
             drop(term);
             self.request_redraw();
         }
+    }
+
+    /// Copies a just-finished mouse selection where `copy_on_select` says.
+    fn copy_on_select(&mut self) {
+        match self.config.mouse.copy_on_select {
+            CopyOnSelect::Off => {}
+            CopyOnSelect::Primary => self.copy_selection(ClipKind::Primary),
+            CopyOnSelect::Clipboard => self.copy_selection(ClipKind::Clipboard),
+            CopyOnSelect::Both => {
+                self.copy_selection(ClipKind::Primary);
+                self.copy_selection(ClipKind::Clipboard);
+            }
+        }
+    }
+
+    /// Shift+click: move the end of the current selection to the pointer.
+    fn extend_existing_selection(&mut self, row: usize, col: usize, side: Side) -> bool {
+        let Some(pane) = self.focused_pane() else {
+            return false;
+        };
+        let mut term = pane.session.term.lock();
+        let point = frame::viewport_to_point(row, col, term.grid().display_offset());
+        match &mut term.selection {
+            Some(sel) => {
+                sel.update(point, side);
+                true
+            }
+            None => false,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Context menu
+    // ------------------------------------------------------------------
+
+    fn open_menu(&mut self, row: usize, col: usize) {
+        let has_selection = self
+            .focused_pane()
+            .and_then(|p| p.session.term.lock().selection_to_string())
+            .is_some_and(|t| !t.is_empty());
+        let has_clipboard = self
+            .clipboard
+            .as_mut()
+            .and_then(|c| c.get(ClipKind::Clipboard))
+            .is_some_and(|t| !t.is_empty());
+
+        let mut items = Vec::new();
+        let mut add = |label: &str, hint: String, enabled: bool, action: MenuAction| {
+            items.push((
+                context_menu::Item {
+                    label: label.to_string(),
+                    hint,
+                    enabled,
+                },
+                action,
+            ));
+        };
+        if let Some(link) = self.mouse.hover.clone() {
+            add(
+                "Open Link",
+                "Ctrl+Click".into(),
+                links::openable(&link.uri),
+                MenuAction::OpenLink(link.uri.clone()),
+            );
+            add(
+                "Copy Link",
+                String::new(),
+                true,
+                MenuAction::CopyText(link.uri),
+            );
+        }
+        let b = &self.bindings;
+        add(
+            "Copy",
+            b.hint(Action::Copy),
+            has_selection,
+            MenuAction::Do(Action::Copy),
+        );
+        add(
+            "Paste",
+            b.hint(Action::Paste),
+            has_clipboard,
+            MenuAction::Do(Action::Paste),
+        );
+        add(
+            "Select All",
+            b.hint(Action::SelectAll),
+            true,
+            MenuAction::Do(Action::SelectAll),
+        );
+        add(
+            "Clear Scrollback",
+            b.hint(Action::ClearScrollback),
+            true,
+            MenuAction::Do(Action::ClearScrollback),
+        );
+        add(
+            "Themes…",
+            b.hint(Action::ThemeMenu),
+            true,
+            MenuAction::Do(Action::ThemeMenu),
+        );
+        add(
+            "Reload Config",
+            b.hint(Action::ReloadConfig),
+            true,
+            MenuAction::Do(Action::ReloadConfig),
+        );
+
+        self.menu = Some(ContextMenu {
+            row,
+            col,
+            items,
+            hover: None,
+        });
+        self.request_redraw();
+    }
+
+    fn menu_layout(&self) -> Option<context_menu::Layout> {
+        let menu = self.menu.as_ref()?;
+        let size = self.focused_pane()?.session.size();
+        let items: Vec<_> = menu.items.iter().map(|(item, _)| item.clone()).collect();
+        Some(context_menu::layout(
+            &items, menu.row, menu.col, size.rows, size.cols,
+        ))
+    }
+
+    fn on_menu_click(&mut self, button: MouseButton, row: usize, col: usize) {
+        let Some(layout) = self.menu_layout() else {
+            return;
+        };
+        let count = self.menu.as_ref().map_or(0, |m| m.items.len());
+        match (button, context_menu::item_at(&layout, count, row, col)) {
+            (MouseButton::Left, Some(index)) => self.activate_menu_item(index),
+            (MouseButton::Left, None) if context_menu::contains(&layout, row, col) => {}
+            (MouseButton::Right, _) => self.open_menu(row, col),
+            _ => self.menu = None,
+        }
+    }
+
+    fn activate_menu_item(&mut self, index: usize) {
+        let Some(menu) = self.menu.take() else { return };
+        let Some((item, action)) = menu.items.get(index).cloned() else {
+            return;
+        };
+        if !item.enabled {
+            self.menu = Some(menu);
+            return;
+        }
+        match action {
+            MenuAction::Do(action) => self.perform(action),
+            MenuAction::OpenLink(uri) => open_link(&uri),
+            MenuAction::CopyText(text) => {
+                if let Some(clipboard) = &mut self.clipboard {
+                    clipboard.set(ClipKind::Clipboard, &text, false);
+                }
+            }
+        }
+    }
+
+    /// Keyboard navigation while the menu is open. Returns false for keys
+    /// that should close the menu and then be handled normally.
+    fn on_menu_key(&mut self, key: &Key) -> bool {
+        let Some(menu) = &mut self.menu else {
+            return false;
+        };
+        let enabled: Vec<usize> = (0..menu.items.len())
+            .filter(|&i| menu.items[i].0.enabled)
+            .collect();
+        let position = menu
+            .hover
+            .and_then(|h| enabled.iter().position(|&i| i == h));
+        match key {
+            Key::Named(NamedKey::Escape) => self.menu = None,
+            Key::Named(NamedKey::ArrowDown) if !enabled.is_empty() => {
+                menu.hover = Some(enabled[position.map_or(0, |p| (p + 1) % enabled.len())]);
+            }
+            Key::Named(NamedKey::ArrowUp) if !enabled.is_empty() => {
+                let last = enabled.len() - 1;
+                menu.hover = Some(enabled[position.map_or(last, |p| (p + last) % enabled.len())]);
+            }
+            Key::Named(NamedKey::Enter) => match menu.hover {
+                Some(index) => self.activate_menu_item(index),
+                None => self.menu = None,
+            },
+            _ => {
+                self.menu = None;
+                return false;
+            }
+        }
+        true
     }
 
     // ------------------------------------------------------------------
@@ -1026,6 +1262,16 @@ impl App {
             if focused {
                 if let Some(preedit) = &self.ime_preedit {
                     overlay_preedit(&mut frame, preedit);
+                }
+                if let (Some(menu), Some(layout)) = (&self.menu, self.menu_layout()) {
+                    let items: Vec<_> = menu.items.iter().map(|(item, _)| item.clone()).collect();
+                    let colors = context_menu::Colors {
+                        fg: frame::hex_to_rgb(self.palette.fg),
+                        bg: frame::hex_to_rgb(self.palette.bg),
+                        dim: frame::hex_to_rgb(self.palette.ansi[8]),
+                        accent: frame::hex_to_rgb(self.palette.cursor),
+                    };
+                    context_menu::draw(&mut frame, &layout, &items, menu.hover, &colors);
                 }
             }
             let flash = pane
@@ -1353,6 +1599,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if !focused {
                     self.suppressed.clear();
+                    self.menu = None;
                 }
                 self.request_redraw();
             }

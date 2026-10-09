@@ -50,7 +50,8 @@ cyberterm +shell-integration zsh   # the integration script for zsh, bash or fis
 | Keys | Action |
 |---|---|
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy / paste (bracketed paste when the program asks for it) |
-| `Shift+Insert`, middle click | Paste the primary selection |
+| `Ctrl+Insert` / `Shift+Insert` | Copy / paste, so Omarchy's universal Super+C / Super+V work |
+| Middle click | Paste the primary selection |
 | `Ctrl+Shift+A` | Select the whole scrollback |
 | `Shift+PageUp` / `Shift+PageDown` | Scroll a page |
 | `Ctrl+Shift+Up` / `Ctrl+Shift+Down` | Scroll a line |
@@ -65,8 +66,12 @@ Rebind or free any of them under `[keybindings]` (`"ctrl+shift+k" = "none"`
 hands that combo back to the shell).
 
 Mouse: drag to select (double-click for a word, triple-click for a line,
-Alt+drag for a block, right-click to extend), and selections go to the
-primary selection. The wheel scrolls the scrollback; in full-screen programs
+Alt+drag for a block, Shift+click to extend). Finished selections are copied
+to the primary selection by default; set `[mouse] copy_on_select` to
+`"clipboard"` or `"both"` to have them land on the regular clipboard too.
+Right-click opens a menu with Copy, Paste, Select All, Open/Copy Link,
+Clear Scrollback, Themes and Reload Config (Shift+right-click while a
+program has mouse reporting on). The wheel scrolls the scrollback; in full-screen programs
 without mouse support (`less`, `man`) it sends arrow keys. Programs that
 turn on mouse reporting (vim, htop, tmux, fzf) get clicks, drags and the
 wheel in SGR, UTF-8 or X10 encoding; hold Shift to select text anyway.

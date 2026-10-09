@@ -41,8 +41,9 @@ lines = 10000
 multiplier = 3.0
 
 [mouse]
-# Copy finished selections to the primary selection (middle-click paste).
-copy_on_select = true
+# Where finished selections are copied automatically: "off", "primary"
+# (middle-click paste), "clipboard" (Ctrl+V / Super+V anywhere) or "both".
+copy_on_select = "primary"
 hide_while_typing = true
 
 [clipboard]
