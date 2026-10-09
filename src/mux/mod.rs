@@ -5,6 +5,7 @@
 // `snapshot.rs` how a window rebuilds a pane it attaches to.
 
 pub mod client;
+pub mod layout_doc;
 pub mod protocol;
 pub mod server;
 pub mod snapshot;
@@ -29,5 +30,21 @@ pub fn term_config(settings: &TermSettings) -> TermConfig {
             blinking: settings.cursor_blinking,
         },
         ..TermConfig::default()
+    }
+}
+
+/// Terminal settings for new panes, from the user's config.
+pub fn settings_from_config(c: &crate::config::CyberConfig) -> TermSettings {
+    use crate::config::CursorShapeConfig;
+    TermSettings {
+        scrollback: c.scrollback.lines,
+        kitty_keyboard: c.keyboard.kitty_protocol,
+        cursor_shape: match c.cursor.style {
+            CursorShapeConfig::Block => "block",
+            CursorShapeConfig::Beam => "beam",
+            CursorShapeConfig::Underline => "underline",
+        }
+        .to_string(),
+        cursor_blinking: c.cursor.blinking,
     }
 }

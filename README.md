@@ -45,7 +45,7 @@ cyberterm +default-config          # a commented config with every default
 cyberterm +shell-integration zsh   # the integration script for zsh, bash or fish
 cyberterm +layout [file|dir]       # open a layout (default ./.cyberterm/layout.toml)
 cyberterm +ctl <method> [k=v ...]  # control a running Cyberterm (cyberterm +ctl help)
-cyberterm +attach [name]           # reattach a daemon session (default: most recent)
+cyberterm +attach [name] [--force] [--tty]  # reattach a daemon session (window, or in this terminal)
 cyberterm +sessions                # list daemon sessions
 cyberterm +kill-session <name>     # end a daemon session and its shells
 ```
@@ -159,6 +159,21 @@ detached session comes back with its tabs and splits (`[daemon] reattach`),
 or pick one with `cyberterm +attach <name>`. `cyberterm +sessions` lists
 them; the daemon exits by itself once the last session ends.
 
+**From another terminal or over SSH:** `cyberterm +attach` with no display
+(an SSH login, a console), or with `--tty`, attaches inside the terminal
+you're in. It draws the active tab's splits as text with a status line;
+keys go straight to the focused pane, and the pane's input modes
+(application keys, bracketed paste, mouse, Kitty keyboard) are mirrored onto
+your terminal so programs behave as they would locally. Bells, titles and
+clipboard copies (OSC 52) reach your terminal too.
+
+Commands are `Ctrl+\` then a key: `d` detach, `%` / `"` split, `x` close,
+`z` zoom, `o` or arrows to move between panes, `c` new tab, `n` / `p` /
+`1`–`9` tabs, `&` close tab, `b` broadcast, `?` help; `Ctrl+\` twice
+sends it to the program. A session open in a window can be taken over with
+`--force` (the window says so). With no detached session to resume,
+`cyberterm +attach` starts a new one, like `tmux new -A`.
+
 ### Control socket
 
 A running Cyberterm listens on a user-only Unix socket
@@ -262,8 +277,9 @@ app apply without a restart.
 
 - Without `[daemon] enabled`, shells live in the window's process and end
   with it. The daemon is opt-in while it's new.
-- No terminal (TTY) client yet: you can't reattach a session from inside
-  another terminal or over SSH. That's the next step.
+- The terminal attach client has no scrollback view of its own yet (use the
+  program's own scrolling or attach from a window), and forwards mouse
+  reports only to programs using SGR mouse mode (nearly all do).
 - No scrollback search yet.
 - No sixel or Kitty graphics protocol (inline images) yet.
 

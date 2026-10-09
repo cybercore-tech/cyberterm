@@ -88,12 +88,13 @@ impl Dimensions for Size {
     }
 }
 
-#[derive(Clone, PartialEq)]
-struct Style {
-    fg: Color,
-    bg: Color,
-    flags: Flags,
-    underline: Option<Color>,
+/// The visual attributes of a cell, and how to set them with SGR.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct Style {
+    pub fg: Color,
+    pub bg: Color,
+    pub flags: Flags,
+    pub underline: Option<Color>,
 }
 
 impl Style {
@@ -105,7 +106,7 @@ impl Style {
         .union(Flags::HIDDEN)
         .union(Flags::STRIKEOUT);
 
-    fn of(cell: &Cell) -> Self {
+    pub fn of(cell: &Cell) -> Self {
         Self {
             fg: cell.fg,
             bg: cell.bg,
@@ -114,7 +115,7 @@ impl Style {
         }
     }
 
-    fn default_style() -> Self {
+    pub fn default_style() -> Self {
         Self {
             fg: Color::Named(NamedColor::Foreground),
             bg: Color::Named(NamedColor::Background),
@@ -123,7 +124,8 @@ impl Style {
         }
     }
 
-    fn sgr(&self, out: &mut Vec<u8>) {
+    /// Resets attributes, then sets these.
+    pub fn sgr(&self, out: &mut Vec<u8>) {
         let mut params = vec!["0".to_string()];
         let f = self.flags;
         for (flag, code) in [

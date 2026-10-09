@@ -270,10 +270,30 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
-        "+attach" => CliAction::RunAttach(match args.get(2) {
-            Some(name) => crate::app::AttachTarget::Named(name.clone()),
-            None => crate::app::AttachTarget::Latest,
-        }),
+        "+attach" => {
+            let mut target = crate::app::AttachTarget::default();
+            let mut tty = false;
+            for arg in &args[2..] {
+                match arg.as_str() {
+                    "--force" | "-f" => target.force = true,
+                    "--tty" | "-t" => tty = true,
+                    name => target.name = Some(name.to_string()),
+                }
+            }
+            // Over SSH or on a console there's no display to open a window
+            // on, so attach inside this terminal.
+            let no_display = std::env::var_os("WAYLAND_DISPLAY").is_none()
+                && std::env::var_os("DISPLAY").is_none();
+            if tty || no_display {
+                if let Err(e) = crate::tty_client::run(target, &current_config) {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+                CliAction::ExitCleanly
+            } else {
+                CliAction::RunAttach(target)
+            }
+        }
 
         "+sessions" => {
             match crate::mux::client::DaemonClient::connect_existing()

@@ -1116,7 +1116,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Term(id, event) => self.on_term_event(event_loop, id, event),
-            UserEvent::DaemonLost => self.daemon_lost(),
+            UserEvent::DaemonLost(reason) => self.daemon_lost(&reason),
             UserEvent::Control(call) => {
                 let id = call.request.id.clone();
                 let outcome = self.on_control(call.request);

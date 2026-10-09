@@ -4,64 +4,34 @@
 // session at startup, rebuilding its tabs and splits from the saved
 // layout, saving the layout as it changes, and detaching on close.
 
-use serde::{Deserialize, Serialize};
-
 use super::*;
-use crate::layout::{Node, Removed, Tab};
 use crate::mux::client::DaemonClient;
 use crate::mux::protocol::{ClientMsg, PaneInfo, Size, TermSettings};
 
 /// What `cyberterm +attach` asked for.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum AttachTarget {
-    /// The most recently detached session.
-    Latest,
-    Named(String),
-}
-
-/// The window's layout as stored in its session.
-#[derive(Serialize, Deserialize)]
-struct LayoutDoc {
-    tabs: Vec<TabDoc>,
-    active: usize,
-}
-
-#[derive(Serialize, Deserialize)]
-struct TabDoc {
-    title: Option<String>,
-    root: Node,
-    focused: PaneId,
-    zoomed: bool,
-    broadcast: bool,
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AttachTarget {
+    /// `None` = the most recently detached session.
+    pub name: Option<String>,
+    /// Take the session over from a client that has it attached.
+    pub force: bool,
 }
 
 impl App {
     pub(super) fn term_settings(&self) -> TermSettings {
-        let c = &self.config;
-        TermSettings {
-            scrollback: c.scrollback.lines,
-            kitty_keyboard: c.keyboard.kitty_protocol,
-            cursor_shape: match c.cursor.style {
-                CursorShapeConfig::Block => "block",
-                CursorShapeConfig::Beam => "beam",
-                CursorShapeConfig::Underline => "underline",
-            }
-            .to_string(),
-            cursor_blinking: c.cursor.blinking,
-        }
+        crate::mux::settings_from_config(&self.config)
     }
 
     /// Connects to (or starts) the daemon and attaches to a session.
     /// Returns true when an existing session's tabs were restored.
     pub(super) fn start_daemon_session(&mut self) -> std::io::Result<bool> {
-        let client = DaemonClient::connect_or_start(self.proxy.clone())?;
+        let client = DaemonClient::connect_or_start(crate::session::sink_for(self.proxy.clone()))?;
         let target = self.startup_attach.take();
         let explicit = target.is_some();
         let reattach = self.config.daemon.reattach && self.startup_layout.is_none();
         let attached = match &target {
-            Some(AttachTarget::Named(name)) => client.attach(Some(name.clone())),
-            Some(AttachTarget::Latest) => client.attach(None),
-            None if reattach => client.attach(None),
+            Some(t) => client.attach(t.name.clone(), t.force),
+            None if reattach => client.attach(None, false),
             None => Err(std::io::Error::other("new session")),
         };
         let (name, layout, panes, note) = match attached {
@@ -137,52 +107,10 @@ impl App {
                 });
             }
         }
-        let exists = |id: PaneId, panes: &[Pane]| panes.iter().any(|p| p.id == id);
-
-        let doc: Option<LayoutDoc> = serde_json::from_value(layout.clone()).ok();
-        let mut placed = Vec::new();
-        if let Some(doc) = doc {
-            for tab in doc.tabs {
-                let mut root = tab.root;
-                let mut alive = true;
-                for id in root.panes() {
-                    if !exists(id, &self.panes) || placed.contains(&id) {
-                        if let Removed::Empty = root.remove(id) {
-                            alive = false;
-                            break;
-                        }
-                    }
-                }
-                if !alive {
-                    continue;
-                }
-                let ids = root.panes();
-                placed.extend(ids.iter().copied());
-                let focused = if ids.contains(&tab.focused) {
-                    tab.focused
-                } else {
-                    ids[0]
-                };
-                let mut t = Tab::new(self.next_tab, focused);
-                self.next_tab += 1;
-                t.root = root;
-                t.title = tab.title;
-                t.zoomed = tab.zoomed && ids.len() > 1;
-                t.broadcast = tab.broadcast && ids.len() > 1;
-                self.tabs.push(t);
-            }
-            self.active_tab = doc.active;
-        }
-        let orphans: Vec<PaneId> = self
-            .panes
-            .iter()
-            .map(|p| p.id)
-            .filter(|id| !placed.contains(id))
-            .collect();
-        for id in orphans {
-            self.tabs.push(Tab::new(self.next_tab, id));
-            self.next_tab += 1;
-        }
+        let ids: Vec<PaneId> = self.panes.iter().map(|p| p.id).collect();
+        let (tabs, active) = crate::mux::layout_doc::decode(layout, &ids, &mut self.next_tab);
+        self.tabs = tabs;
+        self.active_tab = active;
         if self.tabs.is_empty() {
             return false;
         }
@@ -249,23 +177,8 @@ impl App {
     pub(super) fn save_layout(&mut self) {
         self.layout_dirty = false;
         let Some(client) = &self.daemon else { return };
-        let doc = LayoutDoc {
-            tabs: self
-                .tabs
-                .iter()
-                .map(|t| TabDoc {
-                    title: t.title.clone(),
-                    root: t.root.clone(),
-                    focused: t.focused,
-                    zoomed: t.zoomed,
-                    broadcast: t.broadcast,
-                })
-                .collect(),
-            active: self.active_tab,
-        };
-        if let Ok(layout) = serde_json::to_value(doc) {
-            let _ = client.send(&ClientMsg::SaveLayout { layout });
-        }
+        let layout = crate::mux::layout_doc::encode(&self.tabs, self.active_tab);
+        let _ = client.send(&ClientMsg::SaveLayout { layout });
     }
 
     /// Colors the daemon reports when programs query them.
@@ -305,12 +218,17 @@ impl App {
         }
     }
 
-    /// The daemon went away: say so in every pane and stop sending to it.
-    pub(super) fn daemon_lost(&mut self) {
-        if self.daemon.take().is_none() {
+    /// The daemon went away, or detached this window because the session
+    /// was attached elsewhere: say so in every pane and stop sending to it.
+    pub(super) fn daemon_lost(&mut self, reason: &str) {
+        let Some(client) = self.daemon.take() else {
             return;
-        }
-        let notice = b"\r\n\x1b[0;1;31m[cyberterm: lost the session daemon; these shells are gone]\x1b[0m\r\n";
+        };
+        // Panes still hold the client; close it so the daemon doesn't wait
+        // on this window any more.
+        client.close();
+        let notice = format!("\r\n\x1b[0;1;31m[cyberterm: {reason}]\x1b[0m\r\n");
+        let notice = notice.as_bytes();
         for pane in &self.panes {
             let mut term = pane.session.term.lock();
             let mut parser: alacritty_terminal::vte::ansi::Processor<
