@@ -34,6 +34,7 @@ pub struct CyberConfig {
     pub history: HistoryConfig,
     pub notify: NotifyConfig,
     pub blocks: BlocksConfig,
+    pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
     /// built-in bindings (`input::bindings`). Map a combo to `"none"` to
     /// unbind a default and let the keystroke reach the shell instead.
@@ -61,6 +62,7 @@ impl Default for CyberConfig {
             history: HistoryConfig::default(),
             notify: NotifyConfig::default(),
             blocks: BlocksConfig::default(),
+            links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -428,6 +430,18 @@ impl Default for BlocksConfig {
     fn default() -> Self {
         Self { decorations: true }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct LinksConfig {
+    /// How to open `path:line` references, with `{file}`, `{line}` and
+    /// `{col}` filled in (e.g. `"nvim +{line} {file}"`). Unset: derived
+    /// from $VISUAL / $EDITOR.
+    pub editor: Option<String>,
+    /// Run `editor` in a new pane (terminal editors) instead of as its own
+    /// window (GUI editors).
+    pub editor_in_pane: Option<bool>,
 }
 
 impl Default for ControlConfig {

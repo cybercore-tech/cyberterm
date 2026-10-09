@@ -24,6 +24,14 @@ impl App {
             return;
         }
 
+        if self.history_ui.is_some() {
+            self.history_key(&event);
+            return;
+        }
+        if self.find.is_some() && self.find_key(&event) {
+            return;
+        }
+
         if self.menu.is_some() && state != KeyState::Release && self.on_menu_key(&event.logical_key)
         {
             self.request_redraw();
@@ -154,6 +162,8 @@ impl App {
             Action::MoveTabRight => self.move_tab(1),
             Action::NewWindow => self.new_window(),
             Action::CopyLastOutput => self.copy_last_output(),
+            Action::FindInScrollback => self.toggle_find(),
+            Action::HistorySearch => self.toggle_history_ui(),
             Action::ShowLastOutput => self.show_last_output(),
         }
         self.request_redraw();
@@ -413,6 +423,7 @@ impl App {
                     row,
                     cols: start..end,
                     uri: link.uri().to_string(),
+                    file: None,
                 });
             }
         }
@@ -431,13 +442,37 @@ impl App {
             char_cols.push(c);
         }
         let index = char_cols.iter().position(|&c| c >= col)?;
-        let (range, uri) = links::url_at(&text, index)?;
-        let start = char_cols[range.start];
-        let end = char_cols.get(range.end).copied().unwrap_or(cols);
+        let span = |range: std::ops::Range<usize>| {
+            char_cols[range.start]..char_cols.get(range.end).copied().unwrap_or(cols)
+        };
+        if let Some((range, uri)) = links::url_at(&text, index) {
+            return Some(HoverLink {
+                row,
+                cols: span(range),
+                uri,
+                file: None,
+            });
+        }
+        // `path:line` references, resolved against the directory the
+        // command ran in, and only when the file exists.
+        let (range, found) = links::file_ref_at(&text, index)?;
+        let base = crate::blocks::block_at(&*term, point.line.0)
+            .and_then(|span| {
+                crate::blocks::meta(&pane.session.shell.lock(), span.mark)
+                    .and_then(|m| m.cwd.clone())
+            })
+            .or_else(|| pane.session.cwd());
+        drop(term);
+        let path = resolve_path(&found.path, base.as_deref())?;
         Some(HoverLink {
             row,
-            cols: start..end,
-            uri,
+            cols: span(range),
+            uri: String::new(),
+            file: Some(FileTarget {
+                path,
+                line: found.line,
+                col: found.col,
+            }),
         })
     }
 
@@ -505,8 +540,11 @@ impl App {
         match (button, pressed) {
             (MouseButton::Left, true) => {
                 if self.mods.control_key() {
-                    if let Some(link) = &self.mouse.hover {
-                        open_link(&link.uri);
+                    if let Some(link) = self.mouse.hover.clone() {
+                        match link.file {
+                            Some(file) => self.open_file(&file),
+                            None => open_link(&link.uri),
+                        }
                         return;
                     }
                 }
@@ -684,7 +722,25 @@ impl App {
                 action,
             ));
         };
-        if let Some(link) = self.mouse.hover.clone() {
+        if let Some(file) = self.mouse.hover.clone().and_then(|l| l.file) {
+            let name = file
+                .path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            add(
+                &format!("Open {name}:{}", file.line),
+                "Ctrl+Click".into(),
+                true,
+                MenuAction::OpenFile(file.clone()),
+            );
+            add(
+                "Copy Path",
+                String::new(),
+                true,
+                MenuAction::CopyText(file.path.to_string_lossy().into_owned()),
+            );
+        } else if let Some(link) = self.mouse.hover.clone() {
             add(
                 "Open Link",
                 "Ctrl+Click".into(),
@@ -732,6 +788,14 @@ impl App {
                 true,
                 MenuAction::Watch(command.clone(), meta.cwd.clone()),
             );
+            if self.block_output_is_json(block) {
+                add(
+                    "View as JSON",
+                    String::new(),
+                    true,
+                    MenuAction::ViewJson(block),
+                );
+            }
             add(
                 "Diff with Previous Run",
                 String::new(),
@@ -821,6 +885,7 @@ impl App {
             MenuAction::Do(action) => self.perform(action),
             MenuAction::OpenLink(uri) => open_link(&uri),
             MenuAction::CopyText(text) => self.copy_text(&text),
+            MenuAction::OpenFile(file) => self.open_file(&file),
             MenuAction::CopyOutput(block) => self.copy_block_output(block),
             MenuAction::Rerun(block, command) => self.rerun(block, &command),
             MenuAction::RunInSplit(command, cwd) => {
@@ -828,6 +893,7 @@ impl App {
             }
             MenuAction::Watch(command, cwd) => self.watch(&command, cwd),
             MenuAction::Diff(block, meta) => self.diff_with_previous(block, &meta),
+            MenuAction::ViewJson(block) => self.view_json(block),
         }
     }
 
@@ -878,4 +944,14 @@ fn is_modifier(key: &Key) -> bool {
                 | NamedKey::Hyper
         )
     )
+}
+
+/// An existing file for a reference: absolute, `~/`, or relative to `base`.
+fn resolve_path(path: &str, base: Option<&std::path::Path>) -> Option<PathBuf> {
+    let p = match path.strip_prefix("~/") {
+        Some(rest) => PathBuf::from(std::env::var_os("HOME")?).join(rest),
+        None => PathBuf::from(path),
+    };
+    let full = if p.is_absolute() { p } else { base?.join(p) };
+    full.is_file().then_some(full)
 }

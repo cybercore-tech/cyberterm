@@ -296,6 +296,29 @@ impl App {
         self.run_in_split(Direction::Down, &command, meta.cwd.clone());
     }
 
+    pub(super) fn block_output_is_json(&self, block: BlockRef) -> bool {
+        self.span_and_output(block)
+            .is_some_and(|(_, text)| crate::json_viewer::looks_like_json(&text))
+    }
+
+    /// Opens a block's JSON output in `cyberterm +json`, in a split.
+    pub(super) fn view_json(&mut self, block: BlockRef) {
+        let Some((_, text)) = self.span_and_output(block) else {
+            return;
+        };
+        let (Some((_, file)), Ok(exe)) =
+            (write_temp_pair(block, "", &text), std::env::current_exe())
+        else {
+            return;
+        };
+        let command = format!(
+            " {} +json {}",
+            shell_quote(&exe.to_string_lossy()),
+            shell_quote(&file.to_string_lossy())
+        );
+        self.run_in_split(Direction::Down, &command, None);
+    }
+
     /// The newest finished command's output in a pager, in a split.
     pub(super) fn show_last_output(&mut self) {
         let Some((block, _)) = self.last_finished() else {
@@ -304,7 +327,20 @@ impl App {
         let Some((_, text)) = self.span_and_output(block) else {
             return;
         };
-        let Some((_, file)) = write_temp_pair(block, "", &text) else {
+        self.show_text_in_pager_for(block, &text);
+    }
+
+    /// Saved output (e.g. from history) in a pager pane.
+    pub(super) fn show_text_in_pager(&mut self, text: &str, id: i64) {
+        let block = BlockRef {
+            pane: u32::MAX,
+            mark: id as u64,
+        };
+        self.show_text_in_pager_for(block, text);
+    }
+
+    fn show_text_in_pager_for(&mut self, block: BlockRef, text: &str) {
+        let Some((_, file)) = write_temp_pair(block, "", text) else {
             return;
         };
         self.run_in_split(
@@ -402,4 +438,138 @@ fn notify_finished(b: &BlockMeta, _pane: PaneId) {
             .arg(title)
             .arg(body),
     );
+}
+
+impl App {
+    /// Opens a file reference in the user's editor at its line.
+    pub(super) fn open_file(&mut self, file: &FileTarget) {
+        let (argv, in_pane) = editor_command(
+            self.config.links.editor.as_deref(),
+            self.config.links.editor_in_pane,
+            file,
+        );
+        if argv.is_empty() {
+            return;
+        }
+        if in_pane {
+            let line = argv
+                .iter()
+                .map(|a| shell_quote(a))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let dir = file.path.parent().map(PathBuf::from);
+            self.run_in_split(Direction::Right, &format!(" {line}"), dir);
+        } else {
+            let mut command = Command::new(&argv[0]);
+            command.args(&argv[1..]);
+            spawn_detached(&mut command);
+        }
+    }
+}
+
+/// Editors that open their own window rather than running in a terminal.
+const GUI_EDITORS: &[&str] = &[
+    "code",
+    "codium",
+    "code-insiders",
+    "cursor",
+    "windsurf",
+    "zed",
+    "zeditor",
+    "subl",
+    "gedit",
+    "kate",
+];
+
+/// The command line to open `file` at its line, and whether it runs in a
+/// pane. `template` (config) wins; otherwise $VISUAL / $EDITOR, using each
+/// editor's own line-number syntax.
+fn editor_command(
+    template: Option<&str>,
+    in_pane: Option<bool>,
+    file: &FileTarget,
+) -> (Vec<String>, bool) {
+    let path = file.path.to_string_lossy().into_owned();
+    let (line, col) = (file.line.to_string(), file.col.unwrap_or(1).to_string());
+    if let Some(t) = template.filter(|t| !t.trim().is_empty()) {
+        let argv: Vec<String> = t
+            .split_whitespace()
+            .map(|w| {
+                w.replace("{file}", &path)
+                    .replace("{line}", &line)
+                    .replace("{col}", &col)
+            })
+            .collect();
+        let gui = argv
+            .first()
+            .is_some_and(|e| GUI_EDITORS.contains(&base_name(e)));
+        return (argv, in_pane.unwrap_or(!gui));
+    }
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .or_else(|| std::env::var("EDITOR").ok())
+        .filter(|e| !e.trim().is_empty())
+        .unwrap_or_else(|| "nano".into());
+    let mut words: Vec<String> = editor.split_whitespace().map(str::to_string).collect();
+    let name = base_name(&words[0]).to_string();
+    let at = format!("{path}:{line}:{col}");
+    let (args, gui): (Vec<String>, bool) = match name.as_str() {
+        "code" | "codium" | "code-insiders" | "cursor" | "windsurf" => {
+            (vec!["-g".into(), at], true)
+        }
+        "zed" | "zeditor" | "subl" => (vec![at], true),
+        "hx" | "helix" => (vec![at], false),
+        "kak" => (vec![format!("+{line}:{col}"), path], false),
+        "nano" => (vec![format!("+{line},{col}"), path], false),
+        "micro" => (vec![at], false),
+        _ => (vec![format!("+{line}"), path], false),
+    };
+    words.extend(args);
+    (words, in_pane.unwrap_or(!gui))
+}
+
+fn base_name(cmd: &str) -> &str {
+    cmd.rsplit('/').next().unwrap_or(cmd)
+}
+
+fn shell_quote(s: &str) -> String {
+    if s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || "/._+-:=@".contains(c))
+    {
+        s.to_string()
+    } else {
+        format!("'{}'", s.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn target() -> FileTarget {
+        FileTarget {
+            path: PathBuf::from("/src/my app/main.rs"),
+            line: 42,
+            col: Some(7),
+        }
+    }
+
+    #[test]
+    fn templates_fill_placeholders() {
+        let (argv, pane) = editor_command(Some("nvim +{line} {file}"), None, &target());
+        assert_eq!(argv, vec!["nvim", "+42", "/src/my app/main.rs"]);
+        assert!(pane);
+        let (argv, pane) = editor_command(Some("code -g {file}:{line}:{col}"), None, &target());
+        assert_eq!(argv[2], "/src/my app/main.rs:42:7");
+        assert!(!pane, "GUI editors get their own window");
+        let (_, pane) = editor_command(Some("code -g {file}"), Some(true), &target());
+        assert!(pane, "explicit editor_in_pane wins");
+    }
+
+    #[test]
+    fn quoting_keeps_spaces_and_quotes_safe() {
+        assert_eq!(shell_quote("/a/b.rs"), "/a/b.rs");
+        assert_eq!(shell_quote("/my app/x"), "'/my app/x'");
+        assert_eq!(shell_quote("it's"), "'it'\\''s'");
+    }
 }

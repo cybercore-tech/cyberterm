@@ -122,6 +122,49 @@ impl Frame {
         (text, cols)
     }
 
+    /// An empty frame for drawing overlays into.
+    pub fn blank(cols: usize, rows: usize, fg: [u8; 3], bg: [u8; 3]) -> Self {
+        Self {
+            cols,
+            rows,
+            cells: vec![RenderCell::blank(fg, bg); cols * rows],
+            cursor: None,
+            display_offset: 0,
+            history: 0,
+            bg,
+        }
+    }
+
+    /// Writes text at a cell, clipped to the row; returns the column after
+    /// it. Wide characters aren't special-cased (overlay text is ASCII or
+    /// single-width symbols).
+    pub fn put(&mut self, row: usize, col: usize, text: &str, fg: [u8; 3], bg: [u8; 3]) -> usize {
+        let mut c = col;
+        if row >= self.rows {
+            return c;
+        }
+        for ch in text.chars() {
+            if c >= self.cols {
+                break;
+            }
+            let cell = &mut self.cells[row * self.cols + c];
+            *cell = RenderCell::blank(fg, bg);
+            cell.ch = ch;
+            c += 1;
+        }
+        c
+    }
+
+    /// Fills the rest of a row from `col` with a background color.
+    pub fn fill(&mut self, row: usize, col: usize, fg: [u8; 3], bg: [u8; 3]) {
+        if row >= self.rows {
+            return;
+        }
+        for c in col..self.cols {
+            self.cells[row * self.cols + c] = RenderCell::blank(fg, bg);
+        }
+    }
+
     /// A frame of plain colored text, used for overlays like the theme menu.
     pub fn from_spans(
         lines: &[Vec<(String, [u8; 3])>],

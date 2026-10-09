@@ -47,6 +47,7 @@ mod control;
 mod daemon;
 pub use daemon::AttachTarget;
 mod input;
+mod overlays;
 mod panes;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -106,6 +107,16 @@ struct HoverLink {
     row: usize,
     cols: std::ops::Range<usize>,
     uri: String,
+    /// Set for `path:line` references (then `uri` is empty).
+    file: Option<FileTarget>,
+}
+
+/// A file reference resolved to an existing file.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct FileTarget {
+    path: PathBuf,
+    line: u32,
+    col: Option<u32>,
 }
 
 /// What a context-menu entry does.
@@ -113,12 +124,14 @@ struct HoverLink {
 enum MenuAction {
     Do(Action),
     OpenLink(String),
+    OpenFile(FileTarget),
     CopyText(String),
     CopyOutput(blocks::BlockRef),
     Rerun(blocks::BlockRef, String),
     RunInSplit(String, Option<PathBuf>),
     Watch(String, Option<PathBuf>),
     Diff(blocks::BlockRef, crate::shell::BlockMeta),
+    ViewJson(blocks::BlockRef),
 }
 
 /// An open right-click menu, anchored at a cell of the focused pane.
@@ -190,6 +203,9 @@ pub struct App {
     session_link: Option<PathBuf>,
     /// Tabs/splits changed since they were last saved with the session.
     layout_dirty: bool,
+    /// The find bar (Ctrl+Shift+F) and history browser (Ctrl+Shift+H).
+    find: Option<overlays::FindState>,
+    history_ui: Option<overlays::HistoryUi>,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -267,6 +283,8 @@ impl App {
             session_link: None,
             layout_dirty: false,
             history: None,
+            find: None,
+            history_ui: None,
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -714,7 +732,15 @@ impl App {
                 .filter(|_| focused)
                 .map(|h| (h.row, h.cols.clone()))
                 .collect();
-            let mut frame = if focused && self.theme_menu.is_open {
+            let history_frame = if focused {
+                let size = pane.session.size();
+                self.draw_history(size.cols, size.rows)
+            } else {
+                None
+            };
+            let mut frame = if let Some(f) = history_frame {
+                f
+            } else if focused && self.theme_menu.is_open {
                 let size = pane.session.size();
                 let lines: Vec<Vec<(String, [u8; 3])>> = ui::theme_menu::build_lines(
                     &self.theme_menu.registry,
@@ -769,8 +795,12 @@ impl App {
             } else {
                 0.0
             };
-            if !(focused && self.theme_menu.is_open) {
+            let overlay_open = focused && (self.theme_menu.is_open || self.history_ui.is_some());
+            if !overlay_open {
                 self.decorate_blocks(pane, &mut frame, rect, &mut list.overlays);
+                if focused {
+                    self.draw_find(&mut frame);
+                }
             }
             list.panes.push((rect, frame, flash, dim));
         }
@@ -836,6 +866,7 @@ impl App {
     }
 
     fn draw(&mut self) {
+        self.refresh_overlays();
         let list = self.build_frames();
         let Some(gpu) = &mut self.gpu else { return };
 
