@@ -30,6 +30,7 @@ pub struct CyberConfig {
     pub tabs: TabsConfig,
     pub splits: SplitsConfig,
     pub control: ControlConfig,
+    pub daemon: DaemonConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
     /// built-in bindings (`input::bindings`). Map a combo to `"none"` to
     /// unbind a default and let the keystroke reach the shell instead.
@@ -53,6 +54,7 @@ impl Default for CyberConfig {
             tabs: TabsConfig::default(),
             splits: SplitsConfig::default(),
             control: ControlConfig::default(),
+            daemon: DaemonConfig::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -344,6 +346,28 @@ pub struct ControlConfig {
     /// Listen on a user-only Unix socket so `cyberterm +ctl` and scripts
     /// can list, read, type into and arrange panes. Read at startup.
     pub enabled: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct DaemonConfig {
+    /// Run shells in the session daemon (`cyberterm +daemon`, started
+    /// automatically) instead of inside the window: closing or crashing a
+    /// window then only detaches it, and its tabs and shells come back on
+    /// the next attach. Read at startup.
+    pub enabled: bool,
+    /// When a window opens and a detached session exists, attach to the
+    /// most recent one instead of starting a new session.
+    pub reattach: bool,
+}
+
+impl Default for DaemonConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            reattach: true,
+        }
+    }
 }
 
 impl Default for ControlConfig {

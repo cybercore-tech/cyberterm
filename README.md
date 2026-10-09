@@ -45,6 +45,9 @@ cyberterm +default-config          # a commented config with every default
 cyberterm +shell-integration zsh   # the integration script for zsh, bash or fish
 cyberterm +layout [file|dir]       # open a layout (default ./.cyberterm/layout.toml)
 cyberterm +ctl <method> [k=v ...]  # control a running Cyberterm (cyberterm +ctl help)
+cyberterm +attach [name]           # reattach a daemon session (default: most recent)
+cyberterm +sessions                # list daemon sessions
+cyberterm +kill-session <name>     # end a daemon session and its shells
 ```
 
 ## ⌨️ Keys and mouse
@@ -136,6 +139,25 @@ panes = [{ command = "cargo watch -x test" }, { command = "npm run dev", cwd = "
 title = "logs"
 layout = { command = "journalctl --user -f" }
 ```
+
+### Sessions that outlive the window
+
+Turn on the session daemon and closing a window (or a crash) no longer ends
+its shells:
+
+```toml
+[daemon]
+enabled = true
+```
+
+The daemon (`cyberterm +daemon`) starts on demand and owns every shell. A
+window attaches to a session, gets an exact replay of each pane (scrollback,
+colors, links, prompt marks, full-screen apps like vim or less), then the
+live output. Close the window and the session detaches: builds keep
+building, servers keep serving. Open Cyberterm again and the most recent
+detached session comes back with its tabs and splits (`[daemon] reattach`),
+or pick one with `cyberterm +attach <name>`. `cyberterm +sessions` lists
+them; the daemon exits by itself once the last session ends.
 
 ### Control socket
 
@@ -238,8 +260,10 @@ app apply without a restart.
 
 ## 🗺 Known limitations
 
-- Sessions live in the window's process: closing the window ends its
-  shells. A background daemon with detach/reattach is the next step.
+- Without `[daemon] enabled`, shells live in the window's process and end
+  with it. The daemon is opt-in while it's new.
+- No terminal (TTY) client yet: you can't reattach a session from inside
+  another terminal or over SSH. That's the next step.
 - No scrollback search yet.
 - No sixel or Kitty graphics protocol (inline images) yet.
 

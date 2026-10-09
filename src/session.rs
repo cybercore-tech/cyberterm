@@ -30,6 +30,8 @@ pub enum UserEvent {
     Term(PaneId, TermEvent),
     /// A request from the control socket (`control.rs`).
     Control(crate::control::Call),
+    /// The session daemon's connection closed.
+    DaemonLost,
 }
 
 /// alacritty_terminal's `EventListener`, tagged with the pane it belongs to.
@@ -37,6 +39,12 @@ pub enum UserEvent {
 pub struct EventProxy {
     pane: PaneId,
     proxy: EventLoopProxy<UserEvent>,
+}
+
+impl EventProxy {
+    pub fn new(pane: PaneId, proxy: EventLoopProxy<UserEvent>) -> Self {
+        Self { pane, proxy }
+    }
 }
 
 impl EventListener for EventProxy {
@@ -82,10 +90,23 @@ pub struct Session {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// Working directory and command state reported by shell integration.
     pub shell: Arc<Mutex<ShellState>>,
-    notifier: Notifier,
+    backend: Backend,
     size: GridSize,
     /// The shell's process id, for the `/proc` working-directory fallback.
     pid: u32,
+}
+
+/// Where the shell actually runs.
+enum Backend {
+    /// A PTY owned by this window.
+    Local(Notifier),
+    /// A PTY owned by the session daemon; `term` is a replica it keeps in
+    /// sync, and input/resizes are forwarded.
+    Remote {
+        pane: PaneId,
+        client: Arc<crate::mux::client::DaemonClient>,
+        cell: (u16, u16),
+    },
 }
 
 fn window_size(size: GridSize, cell_width: f32, cell_height: f32) -> WindowSize {
@@ -152,23 +173,71 @@ impl Session {
         Ok(Self {
             term,
             shell,
-            notifier,
+            backend: Backend::Local(notifier),
             size: opts.size,
             pid,
         })
     }
 
-    pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {
-        self.notifier.notify(bytes);
+    /// A pane living in the session daemon, from the replica its client
+    /// keeps for it.
+    pub fn remote(
+        pane: PaneId,
+        client: Arc<crate::mux::client::DaemonClient>,
+        size: GridSize,
+    ) -> Option<Self> {
+        let (term, shell, pid) = client.replica(pane)?;
+        Some(Self {
+            term,
+            shell,
+            backend: Backend::Remote {
+                pane,
+                client,
+                cell: (0, 0),
+            },
+            size,
+            pid,
+        })
     }
 
-    /// The shell's current directory: what shell integration last
-    /// reported (OSC 7), else what the kernel says (Linux `/proc`).
-    pub fn cwd(&self) -> Option<PathBuf> {
-        if let Some(cwd) = self.shell.lock().cwd.clone() {
-            return Some(cwd);
+    pub fn is_remote(&self) -> bool {
+        matches!(self.backend, Backend::Remote { .. })
+    }
+
+    /// Ends the shell. Local sessions also end when dropped; remote ones
+    /// only end when asked, since dropping one just means the window let
+    /// go of it (detach).
+    pub fn kill(&self) {
+        match &self.backend {
+            Backend::Local(notifier) => {
+                let _ = notifier.0.send(Msg::Shutdown);
+            }
+            Backend::Remote { pane, client, .. } => {
+                let _ = client.send(&crate::mux::protocol::ClientMsg::Kill { pane: *pane });
+                client.forget(*pane);
+            }
         }
-        std::fs::read_link(format!("/proc/{}/cwd", self.pid)).ok()
+    }
+
+    pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {
+        match &self.backend {
+            Backend::Local(notifier) => notifier.notify(bytes),
+            Backend::Remote { pane, client, .. } => {
+                let bytes = bytes.into();
+                if !bytes.is_empty() {
+                    client.send_input(*pane, bytes.into_owned());
+                }
+            }
+        }
+    }
+
+    /// The shell's current directory. The kernel's view (Linux `/proc`) is
+    /// always current; shell integration's OSC 7 report lags behind a
+    /// command that `cd`s and keeps running, so it's the fallback.
+    pub fn cwd(&self) -> Option<PathBuf> {
+        std::fs::read_link(format!("/proc/{}/cwd", self.pid))
+            .ok()
+            .or_else(|| self.shell.lock().cwd.clone())
     }
 
     pub fn size(&self) -> GridSize {
@@ -176,19 +245,46 @@ impl Session {
     }
 
     pub fn resize(&mut self, size: GridSize, cell_width: f32, cell_height: f32) {
-        if size == self.size {
-            return;
+        let ws = window_size(size, cell_width, cell_height);
+        match &mut self.backend {
+            Backend::Local(notifier) => {
+                if size == self.size {
+                    return;
+                }
+                self.size = size;
+                self.term.lock().resize(size);
+                notifier.on_resize(ws);
+            }
+            Backend::Remote { pane, client, cell } => {
+                // The pixel cell size matters to the daemon too (programs
+                // can ask for it), so resend when only that changed.
+                let new_cell = (ws.cell_width, ws.cell_height);
+                if size == self.size && *cell == new_cell {
+                    return;
+                }
+                self.size = size;
+                *cell = new_cell;
+                self.term.lock().resize(size);
+                let _ = client.send(&crate::mux::protocol::ClientMsg::Resize {
+                    pane: *pane,
+                    size: crate::mux::protocol::Size {
+                        cols: ws.num_cols,
+                        rows: ws.num_lines,
+                        cell_width: ws.cell_width,
+                        cell_height: ws.cell_height,
+                    },
+                });
+            }
         }
-        self.size = size;
-        self.term.lock().resize(size);
-        self.notifier
-            .on_resize(window_size(size, cell_width, cell_height));
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
-        // Stops the PTY thread, which drops the PTY and hangs up the shell.
-        let _ = self.notifier.0.send(Msg::Shutdown);
+        // A local session stops its PTY thread, which hangs up the shell.
+        // A remote one is left running in the daemon (detach).
+        if let Backend::Local(notifier) = &self.backend {
+            let _ = notifier.0.send(Msg::Shutdown);
+        }
     }
 }

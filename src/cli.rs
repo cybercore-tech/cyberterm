@@ -10,6 +10,8 @@ pub enum CliAction {
     /// Run, opening this layout file (or project directory) instead of a
     /// single shell.
     RunLayout(std::path::PathBuf),
+    /// Run, attached to a daemon session (`+attach [name]`).
+    RunAttach(crate::app::AttachTarget),
     ExitCleanly,
 }
 
@@ -260,6 +262,59 @@ pub fn handle_arguments(
             }
         }
 
+        "+daemon" => {
+            if let Err(e) = crate::mux::server::run() {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+            CliAction::ExitCleanly
+        }
+
+        "+attach" => CliAction::RunAttach(match args.get(2) {
+            Some(name) => crate::app::AttachTarget::Named(name.clone()),
+            None => crate::app::AttachTarget::Latest,
+        }),
+
+        "+sessions" => {
+            match crate::mux::client::DaemonClient::connect_existing()
+                .and_then(|c| c.list_sessions())
+            {
+                Ok(sessions) if sessions.is_empty() => println!("No sessions."),
+                Ok(sessions) => {
+                    println!("  SESSION      PANES  STATE      AGE");
+                    for s in sessions {
+                        let age = match s.age {
+                            a if a < 60 => format!("{a}s"),
+                            a if a < 3600 => format!("{}m", a / 60),
+                            a if a < 86400 => format!("{}h", a / 3600),
+                            a => format!("{}d", a / 86400),
+                        };
+                        let state = if s.attached { "attached" } else { "detached" };
+                        println!("  {:<12} {:>5}  {:<10} {}", s.name, s.panes, state, age);
+                    }
+                }
+                Err(_) => println!("No session daemon running."),
+            }
+            CliAction::ExitCleanly
+        }
+
+        "+kill-session" => {
+            let Some(name) = args.get(2) else {
+                eprintln!("❌ Usage: cyberterm +kill-session <name>");
+                std::process::exit(2);
+            };
+            match crate::mux::client::DaemonClient::connect_existing()
+                .and_then(|c| c.kill_session(name))
+            {
+                Ok(()) => println!("Killed session {name}."),
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            }
+            CliAction::ExitCleanly
+        }
+
         "+ctl" => {
             run_ctl(&args[2..]);
             CliAction::ExitCleanly
@@ -312,6 +367,10 @@ pub fn handle_arguments(
                 "  cyberterm +ctl <method> [k=v ...]  control a running Cyberterm (see +ctl help)"
             );
             println!("  cyberterm +layout [file|dir]       open a layout (default .cyberterm/layout.toml)");
+            println!("  cyberterm +attach [name]           reattach a daemon session (default: most recent)");
+            println!("  cyberterm +sessions                list daemon sessions");
+            println!("  cyberterm +kill-session <name>     end a daemon session and its shells");
+            println!("  cyberterm +daemon                  run the session daemon (normally started for you)");
             CliAction::ExitCleanly
         }
 

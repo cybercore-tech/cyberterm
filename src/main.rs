@@ -11,6 +11,7 @@ mod frame;
 mod input;
 mod layout;
 mod layout_file;
+mod mux;
 mod renderer;
 mod session;
 mod shell;
@@ -44,11 +45,20 @@ fn main() {
     };
 
     let sys_args: Vec<String> = std::env::args().collect();
-    let startup_layout = match cli::handle_arguments(sys_args, &config_root, cyber_config.clone()) {
-        cli::CliAction::ExitCleanly => return,
-        cli::CliAction::RunTerminal => None,
-        cli::CliAction::RunLayout(path) => Some(std::fs::canonicalize(&path).unwrap_or(path)),
-    };
+    let (startup_layout, startup_attach) =
+        match cli::handle_arguments(sys_args, &config_root, cyber_config.clone()) {
+            cli::CliAction::ExitCleanly => return,
+            cli::CliAction::RunTerminal => (None, None),
+            cli::CliAction::RunLayout(path) => {
+                (Some(std::fs::canonicalize(&path).unwrap_or(path)), None)
+            }
+            cli::CliAction::RunAttach(target) => (None, Some(target)),
+        };
+    let mut cyber_config = cyber_config;
+    if startup_attach.is_some() {
+        // Attaching only makes sense with the daemon.
+        cyber_config.daemon.enabled = true;
+    }
 
     // TERM=alacritty when its terminfo is installed (our parser *is*
     // alacritty's, so that entry describes exactly what we support),
@@ -96,6 +106,7 @@ fn main() {
             initial_theme,
             shared_theme_revision: shared_revision,
             layout: startup_layout,
+            attach: startup_attach,
         },
     );
     let _ = event_loop.run_app(&mut app);

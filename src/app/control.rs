@@ -121,6 +121,7 @@ impl App {
                     .ok_or_else(|| RpcError::failed("no tabs"))?;
                 tab.title = title.filter(|t| !t.is_empty());
                 let id = tab.id;
+                self.layout_dirty = true;
                 self.request_redraw();
                 Ok(json!({ "tab": id }))
             }
