@@ -45,11 +45,23 @@ of those can be driven headlessly in CI or a sandboxed agent shell — there's
 no display, no GPU adapter, and no interactive keyboard focus. What *is*
 tested automatically:
 
-- [x] Theme file parsing (`src/theme.rs`) — real Kitty `.conf` syntax, ANSI-
-      convention fallback when named keys are absent, directory scanning
-- [x] Key-to-PTY-byte encoding (`src/keys.rs`) — the pure logical-key →
-      escape-sequence mapping, independent of any actual keyboard event
-- [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes —
+- [x] Theme file parsing (`src/theme.rs`) and the config schema, defaults
+      and comment-preserving saves (`src/config.rs`)
+- [x] Key encoding, legacy xterm and the Kitty keyboard protocol
+      (`src/input/keyboard.rs`); mouse reports in SGR/UTF-8/X10
+      (`src/input/mouse.rs`); bracketed paste (`src/input/paste.rs`);
+      keybinding parsing and overrides (`src/input/bindings.rs`); URL
+      detection (`src/input/links.rs`)
+- [x] Terminal state to render cells (`src/frame.rs`): real escape
+      sequences are fed into a real `alacritty_terminal::Term` and the
+      resulting cells checked (SGR attributes, 256/truecolor, OSC color
+      overrides, wide chars, combining marks, cursor shapes, selection,
+      scrollback viewport, OSC 8 links)
+- [x] Shell integration: the OSC 7/133 stream tap (`src/shell/tap.rs`),
+      prompt marks surviving scroll into history, and the zsh/bash/fish
+      scripts parsing in their own shells (skipped if a shell isn't installed)
+- [x] Box-drawing/block geometry (`src/boxdraw.rs`)
+- [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 
 When you touch the render/PTY/input path, say so in your PR description and

@@ -1,0 +1,78 @@
+# Cyberterm configuration -- ~/.config/cyberterm/cyber_config.toml
+#
+# Every key is optional; anything left out keeps the default shown here.
+# Edits apply live: Cyberterm re-reads this file within a second of saving.
+# Print this reference again with `cyberterm +default-config`.
+
+# Theme name (see `cyberterm +list-themes`, or Ctrl+Shift+T in the terminal).
+theme = "synthwave_84"
+# Background opacity, 0.0 - 1.0. Text always stays fully opaque.
+opacity = 0.9
+
+[font]
+family = "JetBrainsMono Nerd Font"
+# Points, like Ghostty/Kitty/Alacritty. Ctrl+= / Ctrl+- / Ctrl+0 zoom live.
+size = 9.0
+# Multiple of the font size.
+line_height = 1.25
+# Tried in order for glyphs the primary font lacks (icons, emoji, CJK...).
+fallback = ["Symbols Nerd Font Mono", "Noto Color Emoji"]
+# Programming ligatures (only for fonts that ship them).
+ligatures = false
+# Draw bold text with the bright variant of ANSI colors 0-7.
+bold_is_bright = false
+
+[window]
+# Logical pixels.
+padding = 4.0
+width = 900
+height = 600
+
+[cursor]
+# "block", "beam" or "underline". Programs can still change it (DECSCUSR).
+style = "block"
+blinking = false
+blink_interval_ms = 530
+unfocused_hollow = true
+
+[scrollback]
+lines = 10000
+# Lines per mouse-wheel notch.
+multiplier = 3.0
+
+[mouse]
+# Where finished selections are copied automatically: "off", "primary"
+# (middle-click paste), "clipboard" (Ctrl+V / Super+V anywhere) or "both".
+copy_on_select = "primary"
+hide_while_typing = true
+
+[clipboard]
+# OSC 52: "disabled", "copy", "paste" or "copy-paste". Allowing paste lets
+# any program in the terminal (including over SSH) read your clipboard.
+osc52 = "copy"
+# Replace box-drawing characters with ASCII when copying.
+clean_box_drawing = true
+
+[bell]
+visual = true
+# Mark the window urgent when a bell rings while it is unfocused.
+urgent = true
+# command = "paplay /usr/share/sounds/freedesktop/stereo/bell.oga"
+
+[shell]
+# program = "/usr/bin/zsh"
+args = []
+# TERM for the shell. Defaults to "alacritty" when that terminfo entry is
+# installed (Cyberterm shares alacritty's parser), else "xterm-256color".
+# Use "xterm-256color" if hosts you SSH into don't know "alacritty".
+# term = "xterm-256color"
+
+[keyboard]
+# Let programs opt into the Kitty keyboard protocol.
+kitty_protocol = true
+
+[keybindings]
+# Overrides on top of the built-in bindings (`cyberterm +list-termkeys`).
+# Use "none" to free a combo for the shell, e.g.:
+# "ctrl+shift+k" = "none"
+# "ctrl+alt+c" = "copy"

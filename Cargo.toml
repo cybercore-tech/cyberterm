@@ -16,10 +16,15 @@ wgpu = "24.0.0"                 # Modern low-overhead native GPU interface
 glyphon = "0.8"                 # Real GPU text rendering (cosmic-text + etagere), wgpu ^24 --
                                  # verified against crates.io before pinning, matches wgpu above
 parking_lot = "0.12"            # Low-overhead synchronization mutex primitive
-arboard = "3"                   # Clipboard access (moved in from the removed pty_engine crate)
+arboard = { version = "3", features = ["wayland-data-control"] } # Clipboard + primary selection,
+                                 # native on Wayland (wlr data-control), X11 otherwise
+polling = "3"                   # Same poller alacritty_terminal's PTY loop registers with --
+                                 # needed to implement its EventedReadWrite for the OSC tap
+                                 # wrapper in shell/tap.rs
 
 # --- Configuration & Engine State Serialization ---
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+toml_edit = "0.22"              # Comment-preserving edits when saving theme/opacity
 serde_json = "1.0.150"
 cybercore = "0.8"
