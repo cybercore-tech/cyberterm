@@ -153,6 +153,8 @@ impl App {
             Action::MoveTabLeft => self.move_tab(-1),
             Action::MoveTabRight => self.move_tab(1),
             Action::NewWindow => self.new_window(),
+            Action::CopyLastOutput => self.copy_last_output(),
+            Action::ShowLastOutput => self.show_last_output(),
         }
         self.request_redraw();
     }
@@ -696,6 +698,47 @@ impl App {
                 MenuAction::CopyText(link.uri),
             );
         }
+        if let Some((block, meta)) = self.block_under(row) {
+            let command = meta.command.clone().unwrap_or_default();
+            let short: String = command.chars().take(24).collect();
+            let has_previous = self.previous_output(block, &meta).is_some();
+            add(
+                &format!("Copy Output of `{short}`"),
+                String::new(),
+                true,
+                MenuAction::CopyOutput(block),
+            );
+            add(
+                "Copy Command",
+                String::new(),
+                true,
+                MenuAction::CopyText(command.clone()),
+            );
+            add(
+                "Rerun",
+                String::new(),
+                !meta.running(),
+                MenuAction::Rerun(block, command.clone()),
+            );
+            add(
+                "Rerun in New Pane",
+                String::new(),
+                true,
+                MenuAction::RunInSplit(command.clone(), meta.cwd.clone()),
+            );
+            add(
+                "Watch in New Pane (every 2s)",
+                String::new(),
+                true,
+                MenuAction::Watch(command.clone(), meta.cwd.clone()),
+            );
+            add(
+                "Diff with Previous Run",
+                String::new(),
+                has_previous && !meta.running(),
+                MenuAction::Diff(block, meta.clone()),
+            );
+        }
         let b = &self.bindings;
         add(
             "Copy",
@@ -777,11 +820,14 @@ impl App {
         match action {
             MenuAction::Do(action) => self.perform(action),
             MenuAction::OpenLink(uri) => open_link(&uri),
-            MenuAction::CopyText(text) => {
-                if let Some(clipboard) = &mut self.clipboard {
-                    clipboard.set(ClipKind::Clipboard, &text, false);
-                }
+            MenuAction::CopyText(text) => self.copy_text(&text),
+            MenuAction::CopyOutput(block) => self.copy_block_output(block),
+            MenuAction::Rerun(block, command) => self.rerun(block, &command),
+            MenuAction::RunInSplit(command, cwd) => {
+                self.run_in_split(crate::layout::Direction::Right, &command, cwd)
             }
+            MenuAction::Watch(command, cwd) => self.watch(&command, cwd),
+            MenuAction::Diff(block, meta) => self.diff_with_previous(block, &meta),
         }
     }
 

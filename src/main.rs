@@ -2,12 +2,14 @@
 // The ultimate, scriptable, vintage-meets-modern terminal engine.
 
 mod app;
+mod blocks;
 mod boxdraw;
 mod cli;
 mod clipboard;
 mod config;
 mod control;
 mod frame;
+mod history;
 mod input;
 mod layout;
 mod layout_file;

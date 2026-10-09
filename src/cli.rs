@@ -263,7 +263,15 @@ pub fn handle_arguments(
         }
 
         "+daemon" => {
-            if let Err(e) = crate::mux::server::run() {
+            let history = current_config.history.enabled.then(|| {
+                crate::history::Recorder::start(crate::history::default_path()).map(|r| {
+                    (
+                        r,
+                        crate::history::Policy::from_config(&current_config.history),
+                    )
+                })
+            });
+            if let Err(e) = crate::mux::server::run(history.flatten()) {
                 eprintln!("❌ {e}");
                 std::process::exit(1);
             }
@@ -293,6 +301,11 @@ pub fn handle_arguments(
             } else {
                 CliAction::RunAttach(target)
             }
+        }
+
+        "+history" => {
+            run_history(&args[2..]);
+            CliAction::ExitCleanly
         }
 
         "+sessions" => {
@@ -389,6 +402,7 @@ pub fn handle_arguments(
             println!("  cyberterm +layout [file|dir]       open a layout (default .cyberterm/layout.toml)");
             println!("  cyberterm +attach [name]           reattach a daemon session (default: most recent)");
             println!("  cyberterm +sessions                list daemon sessions");
+            println!("  cyberterm +history [words] [...]   search saved commands and their output (+history --help)");
             println!("  cyberterm +kill-session <name>     end a daemon session and its shells");
             println!("  cyberterm +daemon                  run the session daemon (normally started for you)");
             CliAction::ExitCleanly
@@ -452,6 +466,7 @@ parse as JSON are used as JSON (pane=3, paste=true); the rest are strings.
   set-title   [tab=N] title=NAME
   resize      [pane=N] direction=... [amount=N]
   load-layout [path=FILE|DIR]             open a layout's tabs in this window
+  history     [query=WORDS] [failed=true] [cwd=DIR] [limit=N] [output=true]
 
 Without pane=N, methods act on the focused pane.";
 
@@ -508,6 +523,104 @@ fn run_ctl(args: &[String]) {
         Err(e) => {
             eprintln!("❌ {}: {e}", socket.display());
             std::process::exit(1);
+        }
+    }
+}
+
+const HISTORY_HELP: &str = "\
+cyberterm +history [words ...] [--failed] [--here] [-n N]
+cyberterm +history --output <id>
+
+Searches commands saved by shell integration (newest first). Words match
+the command line or its output; all must match.
+
+  --failed     only commands that exited non-zero
+  --here       only commands run in the current directory
+  -n N         show N results (default 20)
+  --output ID  print the saved output of one command";
+
+fn run_history(args: &[String]) {
+    let mut query = crate::history::Query {
+        limit: 20,
+        ..crate::history::Query::default()
+    };
+    let mut words = Vec::new();
+    let mut output_id = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--help" | "-h" => {
+                println!("{HISTORY_HELP}");
+                return;
+            }
+            "--failed" => query.failed_only = true,
+            "--here" => {
+                query.cwd = std::env::current_dir()
+                    .ok()
+                    .map(|d| d.to_string_lossy().into_owned())
+            }
+            "-n" => query.limit = iter.next().and_then(|n| n.parse().ok()).unwrap_or(20),
+            "--output" => output_id = iter.next().and_then(|n| n.parse::<i64>().ok()),
+            word => words.push(word.to_string()),
+        }
+    }
+    if !words.is_empty() {
+        query.text = Some(words.join(" "));
+    }
+    let path = crate::history::default_path();
+    let store = match crate::history::Store::open(&path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("❌ {}: {e}", path.display());
+            std::process::exit(1);
+        }
+    };
+    if let Some(id) = output_id {
+        match store.output(id) {
+            Ok(Some(text)) => println!("{text}"),
+            _ => {
+                eprintln!("❌ No saved command {id}.");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    let entries = match store.search(&query) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(1);
+        }
+    };
+    if entries.is_empty() {
+        println!("No matching commands.");
+        return;
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    // Oldest of the page first, so the newest ends up next to the prompt.
+    for e in entries.iter().rev() {
+        let when = crate::history::format_time(e.started_ms);
+        let status = match e.exit {
+            Some(0) => "✓".to_string(),
+            Some(code) => format!("✗{code}"),
+            None => "?".to_string(),
+        };
+        let duration = crate::blocks::format_duration(e.finished_ms.saturating_sub(e.started_ms));
+        let cwd = e
+            .cwd
+            .clone()
+            .map(|c| match c.strip_prefix(&home) {
+                Some(rest) if !home.is_empty() => format!("~{rest}"),
+                _ => c,
+            })
+            .unwrap_or_default();
+        println!(
+            "{:>6}  {when}  {status:<4} {duration:>6}  {cwd}  $ {}",
+            e.id, e.command
+        );
+        if let Some(snippet) = e.snippet.as_deref().filter(|s| !s.is_empty()) {
+            let line = snippet.replace('\n', " ⏎ ");
+            println!("{:>8}{}", "", line.chars().take(110).collect::<String>());
         }
     }
 }

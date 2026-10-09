@@ -69,6 +69,42 @@ impl App {
             "get_text" => self.rpc_get_text(p),
             "send_text" => self.rpc_send_text(p),
             "split" => self.rpc_split(p),
+            "history" => {
+                let path = crate::history::default_path();
+                let store = crate::history::Store::open(&path)
+                    .map_err(|e| RpcError::failed(format!("history: {e}")))?;
+                let query = crate::history::Query {
+                    text: opt_str(p, "query")?.map(str::to_string),
+                    failed_only: p.get("failed").and_then(Value::as_bool).unwrap_or(false),
+                    cwd: opt_str(p, "cwd")?.map(str::to_string),
+                    limit: opt_u32(p, "limit")?.unwrap_or(20).min(500) as usize,
+                    ..Default::default()
+                };
+                let with_output = p.get("output").and_then(Value::as_bool).unwrap_or(false);
+                let entries = store
+                    .search(&query)
+                    .map_err(|e| RpcError::failed(format!("history: {e}")))?;
+                Ok(Value::Array(
+                    entries
+                        .into_iter()
+                        .map(|e| {
+                            let output = with_output.then(|| store.output(e.id).ok().flatten());
+                            json!({
+                                "id": e.id,
+                                "command": e.command,
+                                "cwd": e.cwd,
+                                "exit": e.exit,
+                                "started_ms": e.started_ms,
+                                "finished_ms": e.finished_ms,
+                                "host": e.host,
+                                "session": e.session,
+                                "snippet": e.snippet,
+                                "output": output.flatten(),
+                            })
+                        })
+                        .collect(),
+                ))
+            }
             "load_layout" => {
                 let path = match opt_str(p, "path")? {
                     Some(path) => expand_home(path),

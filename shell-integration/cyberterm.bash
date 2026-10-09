@@ -36,8 +36,17 @@ _cyberterm_prompt_command() {
   return $ret
 }
 
+# The command about to run (history's newest entry), percent-encoded.
+_cyberterm_cmdline() {
+  local c
+  c=$(HISTTIMEFORMAT= builtin history 1)
+  c=${c#*[0-9]  }
+  _cyberterm_urlencode "$c"
+  printf '%s' "$REPLY"
+}
+
 # PS0 is expanded after a command line is read, right before it runs. The
 # array-subscript arithmetic sets the flag in this shell (not a subshell)
-# while expanding to nothing.
-PS0='${_cyberterm_noop[$((_cyberterm_running=1))]}\e]133;C\a'"${PS0-}"
+# while expanding to nothing; the command line rides along on 133;C.
+PS0='${_cyberterm_noop[$((_cyberterm_running=1))]}\e]133;C;cmdline_url=$(_cyberterm_cmdline)\a'"${PS0-}"
 PROMPT_COMMAND="_cyberterm_prompt_command${PROMPT_COMMAND:+;$PROMPT_COMMAND}"

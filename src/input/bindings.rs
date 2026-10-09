@@ -55,6 +55,8 @@ pub enum Action {
     MoveTabLeft,
     MoveTabRight,
     NewWindow,
+    CopyLastOutput,
+    ShowLastOutput,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -234,6 +236,16 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "new_window",
         "Open a new Cyberterm window",
     ),
+    (
+        Action::CopyLastOutput,
+        "copy_last_output",
+        "Copy the last command's output",
+    ),
+    (
+        Action::ShowLastOutput,
+        "show_last_output",
+        "Open the last command's output in a pager",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -298,6 +310,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("alt+8", "goto_tab_8"),
     ("alt+9", "last_tab"),
     ("ctrl+shift+n", "new_window"),
+    ("ctrl+shift+g", "show_last_output"),
+    ("ctrl+shift+y", "copy_last_output"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

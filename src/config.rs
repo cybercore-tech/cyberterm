@@ -31,6 +31,9 @@ pub struct CyberConfig {
     pub splits: SplitsConfig,
     pub control: ControlConfig,
     pub daemon: DaemonConfig,
+    pub history: HistoryConfig,
+    pub notify: NotifyConfig,
+    pub blocks: BlocksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
     /// built-in bindings (`input::bindings`). Map a combo to `"none"` to
     /// unbind a default and let the keystroke reach the shell instead.
@@ -55,6 +58,9 @@ impl Default for CyberConfig {
             splits: SplitsConfig::default(),
             control: ControlConfig::default(),
             daemon: DaemonConfig::default(),
+            history: HistoryConfig::default(),
+            notify: NotifyConfig::default(),
+            blocks: BlocksConfig::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -367,6 +373,60 @@ impl Default for DaemonConfig {
             enabled: false,
             reattach: true,
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct HistoryConfig {
+    /// Save every finished command (with its output, secrets redacted) to
+    /// a searchable database. Needs shell integration. Read at startup.
+    pub enabled: bool,
+    /// Output kept per command; longer output keeps its start and end.
+    pub max_output_kb: usize,
+    /// Regexes; matching command lines aren't saved. Lines starting with a
+    /// space never are.
+    pub ignore: Vec<String>,
+}
+
+impl Default for HistoryConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_output_kb: 256,
+            ignore: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct NotifyConfig {
+    /// Desktop notification when a command that ran at least this many
+    /// seconds finishes while you're not looking at it. 0 turns it off.
+    pub long_command_seconds: u64,
+}
+
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self {
+            long_command_seconds: 10,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct BlocksConfig {
+    /// Draw a colored bar beside each command block (green ok, red failed,
+    /// yellow running) and its exit code and duration. Needs shell
+    /// integration.
+    pub decorations: bool,
+}
+
+impl Default for BlocksConfig {
+    fn default() -> Self {
+        Self { decorations: true }
     }
 }
 

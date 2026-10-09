@@ -9,7 +9,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::Term;
 
-pub use tap::{ShellState, TappedPty, MARK_SCHEME};
+pub use tap::{BlockMeta, ShellState, TappedPty, MARK_SCHEME};
 
 const ZSH: &str = include_str!("../../shell-integration/cyberterm.zsh");
 const BASH: &str = include_str!("../../shell-integration/cyberterm.bash");

@@ -70,6 +70,7 @@ fn shell_state(info: &super::protocol::ShellInfo) -> ShellState {
         last_exit: info.last_exit,
         command_running: info.command_running,
         prompts: info.prompts,
+        blocks: info.blocks.iter().cloned().collect(),
     }
 }
 
@@ -319,6 +320,8 @@ fn read_loop(
                         if let Some(r) = replicas.lock().get(pane) {
                             *r.shell.lock() = shell_state(shell);
                         }
+                        // Block state changed (gutter, notifications).
+                        wake(*pane, TermEvent::Wakeup);
                         continue;
                     }
                     ServerMsg::Detached { reason } => {

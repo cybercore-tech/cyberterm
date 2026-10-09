@@ -47,6 +47,7 @@ cyberterm +layout [file|dir]       # open a layout (default ./.cyberterm/layout.
 cyberterm +ctl <method> [k=v ...]  # control a running Cyberterm (cyberterm +ctl help)
 cyberterm +attach [name] [--force] [--tty]  # reattach a daemon session (window, or in this terminal)
 cyberterm +sessions                # list daemon sessions
+cyberterm +history [words]         # search saved commands and their output
 cyberterm +kill-session <name>     # end a daemon session and its shells
 ```
 
@@ -192,6 +193,36 @@ cyberterm +ctl new-tab title=logs cwd=~/src command="tail -f app.log"
 This is the same API the planned background daemon and the MCP bridge for AI
 agents will use. Turn it off with `[control] enabled = false`.
 
+## 🧱 Command blocks and history
+
+With shell integration on, every command becomes a **block**:
+
+- **Margin bar:** each block gets a colored bar (green succeeded, red failed, yellow still running).
+- **Badge:** each block shows its exit code and how long it took, e.g. `✓ 1.2s`, `✗ 2 · 3.4s`.
+- **Right-click a block** to:
+  - copy its output or command
+  - **rerun** it (in place, or in a new pane)
+  - **watch** it (a pane that reruns it every 2 seconds)
+  - **diff its output with the previous run**, from the scrollback or from history
+- **Last command's output:** `Ctrl+Shift+G` opens it in a pager; `Ctrl+Shift+Y` copies it.
+- **Long commands:** when one that ran 10s or more finishes while you're looking elsewhere (another window, tab or pane), you get a desktop notification (`[notify] long_command_seconds`).
+
+**History with output.** Finished commands are saved to a searchable SQLite
+database (`~/.local/share/cyberterm/history.sqlite3`): the command, its
+output, exit code, directory, timing, host and session, from every window
+and the daemon. Common secrets (tokens, keys, passwords, private keys) are
+redacted before anything is written; commands typed with a leading space
+are never saved, and `[history] ignore` takes extra patterns.
+
+```bash
+cyberterm +history                      # recent commands
+cyberterm +history curl health          # commands or output containing both words
+cyberterm +history --failed --here      # failures in this directory
+cyberterm +history --output 42          # everything command 42 printed
+```
+
+The same search is on the control socket (`cyberterm +ctl history query=...`).
+
 ## 🐚 Shell integration
 
 ```bash
@@ -200,9 +231,10 @@ eval "$(cyberterm +shell-integration bash)"   # ~/.bashrc
 cyberterm +shell-integration fish | source    # ~/.config/fish/config.fish
 ```
 
-The script makes the shell report its working directory (OSC 7) and mark
-each prompt and command (OSC 133). That's what powers prompt jumping now, and
-what command blocks, "open a split here" and exit-code tracking will build on.
+The script makes the shell report its working directory (OSC 7), mark each
+prompt and command (OSC 133) and send the command line itself. That powers
+prompt jumping, command blocks, history and opening new panes in the same
+directory. Re-source it after upgrading to pick up the command line.
 The marks are stored on the terminal cells themselves, so they scroll,
 reflow on resize and age out of the scrollback with the text they belong to.
 The escapes are harmless in other terminals.

@@ -42,6 +42,7 @@ use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
 use crate::ui::context_menu;
 
+mod blocks;
 mod control;
 mod daemon;
 pub use daemon::AttachTarget;
@@ -92,6 +93,11 @@ struct Pane {
     /// A command to type once the shell is ready (layouts, `+ctl`), and
     /// when it was queued.
     pending_command: Option<(String, Instant)>,
+    /// Newest block mark already considered for a "finished" notification.
+    notified_mark: u64,
+    /// (block count, newest finish time) last seen, to skip the block scan
+    /// when nothing changed.
+    block_sig: (usize, Option<u64>),
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -108,6 +114,11 @@ enum MenuAction {
     Do(Action),
     OpenLink(String),
     CopyText(String),
+    CopyOutput(blocks::BlockRef),
+    Rerun(blocks::BlockRef, String),
+    RunInSplit(String, Option<PathBuf>),
+    Watch(String, Option<PathBuf>),
+    Diff(blocks::BlockRef, crate::shell::BlockMeta),
 }
 
 /// An open right-click menu, anchored at a cell of the focused pane.
@@ -179,6 +190,9 @@ pub struct App {
     session_link: Option<PathBuf>,
     /// Tabs/splits changed since they were last saved with the session.
     layout_dirty: bool,
+    /// Saves finished commands (`[history]`).
+    history: Option<crate::history::Recorder>,
+    history_policy: crate::history::Policy,
 
     config: CyberConfig,
     config_root: PathBuf,
@@ -252,6 +266,10 @@ impl App {
             session_name: None,
             session_link: None,
             layout_dirty: false,
+            history: None,
+            history_policy: crate::history::Policy::from_config(
+                &crate::config::HistoryConfig::default(),
+            ),
             font_size: config.font.size,
             config_mtime: config::config_mtime(&config_root),
             config,
@@ -279,6 +297,10 @@ impl App {
         };
         if let Some(theme) = initial_theme {
             app.apply_theme(&theme);
+        }
+        if app.config.history.enabled {
+            app.history = crate::history::Recorder::start(crate::history::default_path());
+            app.history_policy = crate::history::Policy::from_config(&app.config.history);
         }
         if app.config.control.enabled {
             match crate::control::Server::start(app.proxy.clone()) {
@@ -525,6 +547,17 @@ impl App {
         match event {
             TermEvent::Wakeup => {
                 self.flush_pending_command(index);
+                let sig = {
+                    let shell = self.panes[index].session.shell.lock();
+                    (
+                        shell.blocks.len(),
+                        shell.blocks.back().and_then(|b| b.finished_ms),
+                    )
+                };
+                if sig != self.panes[index].block_sig {
+                    self.panes[index].block_sig = sig;
+                    self.blocks_changed(index);
+                }
                 self.request_redraw();
             }
             TermEvent::Title(title) => {
@@ -736,6 +769,9 @@ impl App {
             } else {
                 0.0
             };
+            if !(focused && self.theme_menu.is_open) {
+                self.decorate_blocks(pane, &mut frame, rect, &mut list.overlays);
+            }
             list.panes.push((rect, frame, flash, dim));
         }
 

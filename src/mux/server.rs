@@ -101,8 +101,13 @@ impl EventListener for PaneListener {
     }
 }
 
+/// Where finished commands are saved, and what to save.
+pub type HistorySink = Option<(crate::history::Recorder, crate::history::Policy)>;
+
 struct ServerPane {
     id: PaneId,
+    session: String,
+    history: HistorySink,
     pid: u32,
     settings: TermSettings,
     config: TermConfig,
@@ -180,6 +185,7 @@ fn shell_info(s: &ShellState) -> ShellInfo {
         last_exit: s.last_exit,
         command_running: s.command_running,
         prompts: s.prompts,
+        blocks: s.blocks.iter().cloned().collect(),
     }
 }
 
@@ -215,6 +221,7 @@ struct ClientRec {
 
 #[derive(Default)]
 struct Hub {
+    history: HistorySink,
     sessions: BTreeMap<String, SessionRec>,
     panes: HashMap<PaneId, Arc<ServerPane>>,
     clients: HashMap<ClientId, ClientRec>,
@@ -303,15 +310,15 @@ impl Hub {
 
 /// Runs the daemon until it has had no sessions and no clients for a few
 /// seconds. Fails if another daemon already answers on the socket.
-pub fn run() -> io::Result<()> {
+pub fn run(history: HistorySink) -> io::Result<()> {
     crate::control::prepare_socket_dir()?;
     tty::setup_env();
-    run_at(&socket_path(), IDLE_EXIT)
+    run_at(&socket_path(), IDLE_EXIT, history)
 }
 
 /// The daemon on a given socket; `idle_exit` is how long it lingers once
 /// it has no sessions and no clients.
-pub fn run_at(path: &std::path::Path, idle_exit: Duration) -> io::Result<()> {
+pub fn run_at(path: &std::path::Path, idle_exit: Duration, history: HistorySink) -> io::Result<()> {
     let path = path.to_path_buf();
     if UnixStream::connect(&path).is_ok() {
         return Err(io::Error::new(
@@ -324,7 +331,10 @@ pub fn run_at(path: &std::path::Path, idle_exit: Duration) -> io::Result<()> {
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
     listener.set_nonblocking(true)?;
 
-    let hub = Arc::new(Mutex::new(Hub::default()));
+    let hub = Arc::new(Mutex::new(Hub {
+        history,
+        ..Hub::default()
+    }));
     let mut idle_since = Instant::now();
     loop {
         match listener.accept() {
@@ -663,12 +673,16 @@ fn spawn_pane(
         h.next_pane += 1;
         h.next_pane
     };
-    let palette = hub
-        .lock()
-        .sessions
-        .get(session)
-        .map(|s| s.palette)
-        .unwrap_or_default();
+    let (palette, history) = {
+        let h = hub.lock();
+        (
+            h.sessions
+                .get(session)
+                .map(|s| s.palette)
+                .unwrap_or_default(),
+            h.history.clone(),
+        )
+    };
 
     let program = program
         .or_else(|| std::env::var("SHELL").ok())
@@ -703,6 +717,8 @@ fn spawn_pane(
     )));
     let pane = Arc::new(ServerPane {
         id,
+        session: session.to_string(),
+        history,
         pid,
         settings,
         config,
@@ -825,6 +841,14 @@ fn pane_loop(pane: &ServerPane, mut pty: TappedPty, cmds: Receiver<PaneCmd>) {
             }
         }
 
+        if let Some((recorder, policy)) = &pane.history {
+            let records = {
+                let term = pane.term.lock();
+                let mut shell = pane.shell.lock();
+                crate::history::collect(&*term, &mut shell, &pane.session, policy)
+            };
+            recorder.record(records);
+        }
         let shell = pane.shell.lock().clone();
         if shell != last_shell {
             pane.broadcast(&Frame::json(&ServerMsg::ShellState {
@@ -975,7 +999,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("daemon.sock");
         let server_path = path.clone();
-        std::thread::spawn(move || run_at(&server_path, Duration::from_millis(300)));
+        std::thread::spawn(move || run_at(&server_path, Duration::from_millis(300), None));
 
         let size = Size {
             cols: 40,

@@ -87,6 +87,8 @@ impl App {
             bell_unseen: false,
             title: String::new(),
             pending_command: None,
+            notified_mark: 0,
+            block_sig: (0, None),
         });
         Ok(id)
     }
