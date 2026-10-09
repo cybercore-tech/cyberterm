@@ -61,6 +61,10 @@ tested automatically:
       prompt marks surviving scroll into history, and the zsh/bash/fish
       scripts parsing in their own shells (skipped if a shell isn't installed)
 - [x] Box-drawing/block geometry (`src/boxdraw.rs`)
+- [x] Split-tree layout: split, close, resize, equalize, directional
+      focus, dividers, zoom (`src/layout.rs`); layout files
+      (`src/layout_file.rs`); tab bar (`src/ui/tab_bar.rs`); context menu
+      (`src/ui/context_menu.rs`); control-socket protocol (`src/control.rs`)
 - [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 

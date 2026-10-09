@@ -386,6 +386,45 @@ fn cursor_draw(
     })
 }
 
+/// Plain text of grid lines `from..=to` (negative = scrollback). Lines the
+/// terminal soft-wrapped are joined back together, trailing blanks are
+/// trimmed, and the second half of wide characters is skipped.
+pub fn lines_text<T>(term: &Term<T>, from: i32, to: i32) -> String {
+    let grid = term.grid();
+    let cols = grid.columns();
+    let from = from.max(grid.topmost_line().0);
+    let to = to.min(grid.bottommost_line().0);
+    let mut out = String::new();
+    let mut line_buf = String::new();
+    for line in from..=to {
+        let row = &grid[Line(line)];
+        for col in 0..cols {
+            let cell = &row[Column(col)];
+            if cell
+                .flags
+                .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
+            line_buf.push(cell.c);
+            if let Some(extra) = cell.zerowidth() {
+                line_buf.extend(extra.iter());
+            }
+        }
+        let wrapped = row[Column(cols - 1)].flags.contains(Flags::WRAPLINE);
+        if !wrapped {
+            out.push_str(line_buf.trim_end());
+            out.push('\n');
+            line_buf.clear();
+        }
+    }
+    out.push_str(line_buf.trim_end());
+    // Drop blank lines below the last output.
+    let trimmed = out.trim_end_matches('\n').len();
+    out.truncate(trimmed);
+    out
+}
+
 /// Grid point (scrollback-aware) for a viewport cell.
 pub fn viewport_to_point(row: usize, col: usize, display_offset: usize) -> Point {
     Point::new(Line(row as i32 - display_offset as i32), Column(col))
@@ -633,6 +672,20 @@ pub(crate) mod tests {
         let link = grid[Line(0)][Column(0)].hyperlink().unwrap();
         assert_eq!(link.uri(), "https://example.com");
         assert!(grid[Line(0)][Column(5)].hyperlink().is_none());
+    }
+
+    #[test]
+    fn lines_text_joins_wraps_and_reaches_into_scrollback() {
+        let mut term = test_term(10, 3);
+        feed(&mut term, b"first\r\n0123456789abc\r\nlast");
+        // 0123456789abc wrapped onto two rows; with 3 rows and 4 lines of
+        // output, "first" has scrolled into history.
+        let all = lines_text(&term, -10, 2);
+        assert_eq!(all, "first\n0123456789abc\nlast");
+        assert_eq!(lines_text(&term, 1, 2), "abc\nlast");
+        let mut term = test_term(10, 2);
+        feed(&mut term, "界x".as_bytes());
+        assert_eq!(lines_text(&term, 0, 1), "界x");
     }
 
     #[test]

@@ -27,6 +27,9 @@ pub struct CyberConfig {
     pub bell: BellConfig,
     pub shell: ShellConfig,
     pub keyboard: KeyboardConfig,
+    pub tabs: TabsConfig,
+    pub splits: SplitsConfig,
+    pub control: ControlConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
     /// built-in bindings (`input::bindings`). Map a combo to `"none"` to
     /// unbind a default and let the keystroke reach the shell instead.
@@ -47,6 +50,9 @@ impl Default for CyberConfig {
             bell: BellConfig::default(),
             shell: ShellConfig::default(),
             keyboard: KeyboardConfig::default(),
+            tabs: TabsConfig::default(),
+            splits: SplitsConfig::default(),
+            control: ControlConfig::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -287,13 +293,68 @@ pub struct KeyboardConfig {
     /// modifiers, key release events). Programs that don't ask for it see
     /// the classic xterm encoding either way.
     pub kitty_protocol: bool,
+    /// A tmux-style prefix key (e.g. `"ctrl+b"`). Press it, then a key
+    /// from the leader table (`"leader+%" = "split_right"`, ...). Off by
+    /// default so no key is taken from the shell unless asked for.
+    pub leader: Option<String>,
 }
 
 impl Default for KeyboardConfig {
     fn default() -> Self {
         Self {
             kitty_protocol: true,
+            leader: None,
         }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TabBarMode {
+    /// Shown while there is more than one tab.
+    Auto,
+    Always,
+    Never,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct TabsConfig {
+    pub bar: TabBarMode,
+}
+
+impl Default for TabsConfig {
+    fn default() -> Self {
+        Self {
+            bar: TabBarMode::Auto,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct SplitsConfig {
+    /// How much to dim panes that don't have focus, 0.0 (off) - 1.0.
+    pub inactive_dim: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct ControlConfig {
+    /// Listen on a user-only Unix socket so `cyberterm +ctl` and scripts
+    /// can list, read, type into and arrange panes. Read at startup.
+    pub enabled: bool,
+}
+
+impl Default for ControlConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
+}
+
+impl Default for SplitsConfig {
+    fn default() -> Self {
+        Self { inactive_dim: 0.25 }
     }
 }
 

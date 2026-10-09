@@ -70,9 +70,27 @@ args = []
 [keyboard]
 # Let programs opt into the Kitty keyboard protocol.
 kitty_protocol = true
+# A tmux-style prefix key: press it, then a key from the leader table
+# (tmux's defaults: % " x z o c n p & 1-9 and the arrows). Off by default.
+# leader = "ctrl+b"
+
+[tabs]
+# Tab bar: "auto" (when there's more than one tab), "always" or "never".
+bar = "auto"
+
+[splits]
+# Dim panes that don't have focus: 0.0 (off) to 1.0.
+inactive_dim = 0.25
+
+[control]
+# A user-only Unix socket for `cyberterm +ctl` and scripts (list, read,
+# type into and arrange panes). Read at startup.
+enabled = true
 
 [keybindings]
 # Overrides on top of the built-in bindings (`cyberterm +list-termkeys`).
 # Use "none" to free a combo for the shell, e.g.:
 # "ctrl+shift+k" = "none"
 # "ctrl+alt+c" = "copy"
+# Leader bindings (with [keyboard] leader set):
+# "leader+v" = "split_right"

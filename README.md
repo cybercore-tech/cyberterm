@@ -43,6 +43,8 @@ cyberterm +edit-theme --remove-theme <category> <folder> <name>
 cyberterm +list-termkeys           # the effective keybindings, including your overrides
 cyberterm +default-config          # a commented config with every default
 cyberterm +shell-integration zsh   # the integration script for zsh, bash or fish
+cyberterm +layout [file|dir]       # open a layout (default ./.cyberterm/layout.toml)
+cyberterm +ctl <method> [k=v ...]  # control a running Cyberterm (cyberterm +ctl help)
 ```
 
 ## ⌨️ Keys and mouse
@@ -59,7 +61,7 @@ cyberterm +shell-integration zsh   # the integration script for zsh, bash or fis
 | `Ctrl+Shift+Z` / `Ctrl+Shift+X` | Jump to the previous / next shell prompt |
 | `Ctrl+Shift+K` | Clear the scrollback |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Bigger / smaller / reset font |
-| `Ctrl+Shift+T` | Theme picker |
+| `Ctrl+Shift+,` | Theme picker |
 | `Ctrl+Shift+R` | Reload the config now |
 
 Rebind or free any of them under `[keybindings]` (`"ctrl+shift+k" = "none"`
@@ -77,6 +79,81 @@ turn on mouse reporting (vim, htop, tmux, fzf) get clicks, drags and the
 wheel in SGR, UTF-8 or X10 encoding; hold Shift to select text anyway.
 Hyperlinks, both OSC 8 links and plain `https://` URLs, underline on hover
 and open with Ctrl+click.
+
+## 🪟 Splits and tabs
+
+Splits and tabs use Ghostty's default keys, so Ghostty muscle memory carries
+over:
+
+| Keys | Action |
+|---|---|
+| `Ctrl+Shift+O` / `Ctrl+Shift+E` | Split right / down |
+| `Ctrl+Shift+W` | Close the pane (the window closes with the last one) |
+| `Ctrl+Alt+Arrows` | Move focus between panes |
+| `Ctrl+Super+]` / `Ctrl+Super+[` | Next / previous pane |
+| `Ctrl+Super+Shift+Arrows` | Resize (Omarchy's `+Alt` variant works too) |
+| `Ctrl+Super+Shift+=` | Equalize splits |
+| `Ctrl+Shift+Enter` | Zoom the pane to the whole tab (toggle) |
+| `Ctrl+Shift+B` | Broadcast: type into every pane of the tab (toggle) |
+| `Ctrl+Shift+T` | New tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | Next / previous tab |
+| `Alt+1`…`Alt+8`, `Alt+9` | Go to tab N, last tab |
+| `Ctrl+Shift+PageUp/PageDown` | Move the tab left / right |
+| `Ctrl+Shift+N` | New window |
+
+New panes and tabs open in the focused shell's directory. Click a pane to
+focus it, drag a divider to resize, click a tab to switch, middle-click it
+to close. Unfocused panes are dimmed (`[splits] inactive_dim`), the tab bar
+shows while there's more than one tab (`[tabs] bar`), and a tab with an
+unseen bell gets a dot.
+
+**tmux users:** set `[keyboard] leader = "ctrl+b"` (or any key) and use
+tmux's keys after it: `%` `"` split, `x` close, `z` zoom, `o` next pane,
+arrows focus, `Ctrl+arrows` resize, `c` new tab, `n`/`p` next/previous,
+`1`–`9`, `&` close tab. Press the leader twice to send it to the program.
+Add your own as `"leader+v" = "split_right"`.
+
+### Layouts as code
+
+Put a `.cyberterm/layout.toml` in a project and `cyberterm +layout` opens
+the whole workspace: tabs, splits and what runs where. Commands are typed
+into a shell once its prompt is up, so the shell stays when they exit.
+
+```toml
+[[tab]]
+title = "dev"
+[tab.layout]
+split = "right"
+ratio = 0.6
+[[tab.layout.panes]]
+command = "nvim ."
+focus = true
+[[tab.layout.panes]]
+split = "down"
+panes = [{ command = "cargo watch -x test" }, { command = "npm run dev", cwd = "web" }]
+
+[[tab]]
+title = "logs"
+layout = { command = "journalctl --user -f" }
+```
+
+### Control socket
+
+A running Cyberterm listens on a user-only Unix socket
+(`$XDG_RUNTIME_DIR/cyberterm/<pid>.sock`, exported to its shells as
+`CYBERTERM_SOCKET`). It speaks JSON-RPC 2.0, one request per line, and
+`cyberterm +ctl` wraps it:
+
+```bash
+cyberterm +ctl list-panes                             # ids, titles, cwds, sizes, last exit codes
+cyberterm +ctl split direction=down command="htop"    # returns the new pane id
+cyberterm +ctl get-text pane=3 lines=50               # plain text, ready to pipe
+cyberterm +ctl send-text pane=3 text=$'make test\r'
+cyberterm +ctl new-tab title=logs cwd=~/src command="tail -f app.log"
+```
+
+This is the same API the planned background daemon and the MCP bridge for AI
+agents will use. Turn it off with `[control] enabled = false`.
 
 ## 🐚 Shell integration
 
@@ -128,7 +205,7 @@ and load unmodified, so anything pulled straight from
 [kovidgoyal/kitty-themes](https://github.com/kovidgoyal/kitty-themes) drops in
 next to them with zero conversion. `+edit-theme` writes your own custom
 themes as JSON under a `category/folder/` layout alongside the built-ins.
-Press `Ctrl+Shift+T` in the terminal to open the theme picker.
+Press `Ctrl+Shift+,` in the terminal to open the theme picker.
 
 Cyberterm also loads the shared Cybercore theme catalog. Its semantic
 background, foreground, and accent colors map to the terminal's 16 ANSI
@@ -161,9 +238,8 @@ app apply without a restart.
 
 ## 🗺 Known limitations
 
-- One pane per window for now: no tabs or splits yet. The code is
-  structured for them (panes are independent sessions), and they're next on
-  the roadmap.
+- Sessions live in the window's process: closing the window ends its
+  shells. A background daemon with detach/reattach is the next step.
 - No scrollback search yet.
 - No sixel or Kitty graphics protocol (inline images) yet.
 

@@ -28,6 +28,8 @@ pub type PaneId = u32;
 #[derive(Debug)]
 pub enum UserEvent {
     Term(PaneId, TermEvent),
+    /// A request from the control socket (`control.rs`).
+    Control(crate::control::Call),
 }
 
 /// alacritty_terminal's `EventListener`, tagged with the pane it belongs to.
@@ -72,16 +74,18 @@ pub struct SpawnOptions {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub term_config: TermConfig,
+    /// The control socket, exported to the shell as `CYBERTERM_SOCKET`.
+    pub control_socket: Option<PathBuf>,
 }
 
 pub struct Session {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// Working directory and command state reported by shell integration.
-    /// Phase 1 reads it to open new panes/tabs in the same directory.
-    #[allow(dead_code)]
     pub shell: Arc<Mutex<ShellState>>,
     notifier: Notifier,
     size: GridSize,
+    /// The shell's process id, for the `/proc` working-directory fallback.
+    pid: u32,
 }
 
 fn window_size(size: GridSize, cell_width: f32, cell_height: f32) -> WindowSize {
@@ -117,6 +121,12 @@ impl Session {
             env!("CARGO_PKG_VERSION").to_string(),
         );
         env.insert("CYBERTERM_PANE".to_string(), pane.to_string());
+        if let Some(socket) = &opts.control_socket {
+            env.insert(
+                "CYBERTERM_SOCKET".to_string(),
+                socket.to_string_lossy().into_owned(),
+            );
+        }
         if let Some(term) = opts.term.filter(|t| !t.trim().is_empty()) {
             env.insert("TERM".to_string(), term);
         }
@@ -132,6 +142,7 @@ impl Session {
             pane as u64,
         )?;
 
+        let pid = pty.child().id();
         let shell = Arc::new(Mutex::new(ShellState::default()));
         let pty = TappedPty::new(pty, shell.clone())?;
         let event_loop = PtyEventLoop::new(term.clone(), listener, pty, true, false)?;
@@ -143,11 +154,21 @@ impl Session {
             shell,
             notifier,
             size: opts.size,
+            pid,
         })
     }
 
     pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {
         self.notifier.notify(bytes);
+    }
+
+    /// The shell's current directory: what shell integration last
+    /// reported (OSC 7), else what the kernel says (Linux `/proc`).
+    pub fn cwd(&self) -> Option<PathBuf> {
+        if let Some(cwd) = self.shell.lock().cwd.clone() {
+            return Some(cwd);
+        }
+        std::fs::read_link(format!("/proc/{}/cwd", self.pid)).ok()
     }
 
     pub fn size(&self) -> GridSize {
