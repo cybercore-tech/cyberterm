@@ -1,16 +1,36 @@
 // src/clipboard.rs
 //
-// Moved from the now-deleted pty_engine crate -- this logic was already
-// real and correct, it just lived in a crate that was never wired into
-// the build (empty Cargo.toml, never referenced as a dependency).
+// System clipboard and (on Linux) primary selection access. Native on
+// Wayland through the wlr data-control protocol, X11 otherwise.
 
 use arboard::Clipboard;
-use std::collections::HashMap;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Kind {
+    Clipboard,
+    /// The X11/Wayland primary selection: whatever was last selected,
+    /// pasted with middle-click or Shift+Insert. Falls back to the
+    /// clipboard on platforms without one.
+    Primary,
+}
 
 pub struct ClipboardManager {
     ctx: Clipboard,
-    // Maps a raw terminal character to its preferred clean clipboard string
-    codepoint_map: HashMap<char, String>,
+}
+
+/// Box-drawing characters copied out of TUIs are swapped for ASCII so a
+/// pasted table still lines up in places without those glyphs.
+fn clean_box_drawing(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '─' | '━' | '═' => '-',
+            '│' | '┃' | '║' => '|',
+            '┌' | '┐' | '└' | '┘' | '├' | '┤' | '┬' | '┴' | '┼' | '╭' | '╮' | '╯' | '╰' => {
+                '+'
+            }
+            other => other,
+        })
+        .collect()
 }
 
 impl ClipboardManager {
@@ -19,31 +39,53 @@ impl ClipboardManager {
     /// "clipboard operations are silently unavailable," not a fatal error,
     /// since a terminal is otherwise fully usable without one.
     pub fn try_new() -> Option<Self> {
-        let mut map = HashMap::new();
-        // Mimic Ghostty's clean translation presets
-        map.insert('─', "-".to_string());
-        map.insert('│', "|".to_string());
-        map.insert('┌', "+".to_string());
-        map.insert('┐', "+".to_string());
-
         Some(Self {
             ctx: Clipboard::new().ok()?,
-            codepoint_map: map,
         })
     }
 
-    pub fn copy_clean_string(&mut self, terminal_selection: &str) {
-        let mut processed_output = String::with_capacity(terminal_selection.len());
-
-        for c in terminal_selection.chars() {
-            if let Some(replacement) = self.codepoint_map.get(&c) {
-                processed_output.push_str(replacement);
-            } else {
-                processed_output.push(c);
-            }
+    pub fn set(&mut self, kind: Kind, text: &str, clean: bool) {
+        let text = if clean {
+            clean_box_drawing(text)
+        } else {
+            text.to_string()
+        };
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if kind == Kind::Primary {
+            use arboard::{LinuxClipboardKind, SetExtLinux};
+            let _ = self
+                .ctx
+                .set()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text(text);
+            return;
         }
+        let _ = kind;
+        let _ = self.ctx.set_text(text);
+    }
 
-        // Push the sanitized result straight to the OS clipboard
-        let _ = self.ctx.set_text(processed_output);
+    pub fn get(&mut self, kind: Kind) -> Option<String> {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if kind == Kind::Primary {
+            use arboard::{GetExtLinux, LinuxClipboardKind};
+            return self
+                .ctx
+                .get()
+                .clipboard(LinuxClipboardKind::Primary)
+                .text()
+                .ok();
+        }
+        let _ = kind;
+        self.ctx.get_text().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn box_drawing_becomes_ascii() {
+        assert_eq!(clean_box_drawing("┌─┐\n│x│"), "+-+\n|x|");
     }
 }

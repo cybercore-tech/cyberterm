@@ -228,7 +228,67 @@ pub fn handle_arguments(
         "+list-termkeys" => {
             println!("🎹 KEYBINDINGS");
             println!("──────────────────────────────────────────────");
-            println!("  [Ctrl+Shift+T]     -> Open theme menu");
+            for (combo, description) in
+                crate::input::bindings::describe(&current_config.keybindings)
+            {
+                println!("  {combo:<18} {description}");
+            }
+            println!();
+            println!(
+                "  Rebind or unbind under [keybindings] in {}",
+                crate::config::config_path(config_root).display()
+            );
+            CliAction::ExitCleanly
+        }
+
+        "+default-config" => {
+            print!("{}", crate::config::default_config_toml());
+            CliAction::ExitCleanly
+        }
+
+        "+shell-integration" => {
+            let shell = args.get(2).cloned().unwrap_or_else(|| {
+                std::env::var("SHELL")
+                    .ok()
+                    .and_then(|s| s.rsplit('/').next().map(str::to_string))
+                    .unwrap_or_else(|| "bash".to_string())
+            });
+            match crate::shell::integration_script(&shell) {
+                Some(script) => print!("{script}"),
+                None => {
+                    eprintln!("❌ No shell integration for '{shell}'. Supported: zsh, bash, fish");
+                    eprintln!("   zsh:  eval \"$(cyberterm +shell-integration zsh)\"   (~/.zshrc)");
+                    eprintln!(
+                        "   bash: eval \"$(cyberterm +shell-integration bash)\"  (~/.bashrc)"
+                    );
+                    eprintln!(
+                        "   fish: cyberterm +shell-integration fish | source     (config.fish)"
+                    );
+                }
+            }
+            CliAction::ExitCleanly
+        }
+
+        "+help" | "--help" | "-h" => {
+            println!("cyberterm {}", env!("CARGO_PKG_VERSION"));
+            println!();
+            println!("  cyberterm                          launch the terminal");
+            println!("  cyberterm +list-themes             list available themes");
+            println!("  cyberterm +set-theme <name>        switch theme and save it");
+            println!("  cyberterm +set-opacity --custom=N  set background opacity (0-1)");
+            println!("  cyberterm +edit-theme ...          create/view/remove JSON themes");
+            println!("  cyberterm +list-termkeys           show the effective keybindings");
+            println!(
+                "  cyberterm +default-config          print a commented config with every default"
+            );
+            println!(
+                "  cyberterm +shell-integration [sh]  print the zsh/bash/fish integration script"
+            );
+            CliAction::ExitCleanly
+        }
+
+        "--version" | "-V" => {
+            println!("cyberterm {}", env!("CARGO_PKG_VERSION"));
             CliAction::ExitCleanly
         }
 

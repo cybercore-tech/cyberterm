@@ -37,6 +37,7 @@ pub fn build_lines(
     registry: &ThemeRegistry,
     is_creating: bool,
     input_buffer: &str,
+    rows: usize,
 ) -> Vec<Vec<Span>> {
     let mut lines = Vec::new();
 
@@ -49,13 +50,30 @@ pub fn build_lines(
         None
     };
 
-    for i in 0..registry.themes.len() {
-        let theme_item = &registry.themes[i];
+    // Only as many names as fit, scrolled to keep the selection visible;
+    // the shared catalog alone can hold more themes than a small window
+    // has rows.
+    let visible = rows.saturating_sub(11).max(3);
+    let first = registry
+        .selected_index
+        .saturating_sub(visible / 2)
+        .min(registry.themes.len().saturating_sub(visible));
+    for (i, theme_item) in registry.themes.iter().enumerate().skip(first).take(visible) {
         if i == registry.selected_index {
             lines.push(vec![Span::new(format!("> {}", theme_item.name), ACCENT)]);
         } else {
             lines.push(vec![Span::new(format!("  {}", theme_item.name), TEXT)]);
         }
+    }
+    if registry.themes.len() > visible {
+        lines.push(vec![Span::new(
+            format!(
+                "  ({} of {})",
+                registry.selected_index + 1,
+                registry.themes.len()
+            ),
+            DIM,
+        )]);
     }
 
     if is_creating {

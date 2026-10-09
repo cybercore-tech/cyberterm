@@ -1,54 +1,75 @@
 // src/renderer.rs
 //
-// Real GPU text rendering for the terminal grid, via glyphon (cosmic-text +
-// etagere + a wgpu render pipeline) for glyphs, plus a small hand-rolled
-// solid-quad wgpu pipeline for cell backgrounds -- glyphon only rasterizes
-// glyphs, it doesn't fill cell backgrounds, and per-cell background color is
-// part of "real ANSI color support" (a highlighted `ls --color` entry, a
-// selection, etc. all rely on it).
+// GPU rendering of one or more terminal panes into a wgpu surface.
 //
-// This module knows nothing about alacritty_terminal -- it consumes a plain
-// `RenderCell` grid, so it stays testable/reusable independent of the
-// terminal engine's own types.
+// - Glyphs: glyphon (cosmic-text shaping + etagere atlas). Each row is cut
+//   into positioned segments: runs of plain ASCII (one shaped buffer each),
+//   and every other character (wide CJK, emoji, Nerd Font icons, combining
+//   sequences) as its own segment placed at its exact column. A fallback
+//   font with a different advance width can therefore never push the rest
+//   of the line out of alignment.
+// - Shaping is cached by row *content*, not row position: scrolling moves
+//   rows without re-shaping them, and an unchanged screen re-shapes nothing.
+// - Rectangles (cell backgrounds, underlines, cursor, scrollbar, bell flash)
+//   go through a small instanced quad pipeline: backgrounds before text,
+//   decorations after.
+//
+// This module consumes `frame::Frame`s and knows nothing about
+// alacritty_terminal's grid, so the frame logic stays headlessly testable.
 
+use std::collections::hash_map::DefaultHasher;
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
+
+use alacritty_terminal::term::cell::Flags;
 use glyphon::{
     Attrs, Buffer, Cache, Color as GlyphonColor, Family, FontSystem, Metrics, Resolution, Shaping,
-    SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
+    Style, SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use wgpu::util::DeviceExt;
 
-/// The output surface + clear color for one `TermRenderer::render` call,
-/// grouped so the render function doesn't take a pile of loose parameters.
+use crate::boxdraw;
+use crate::frame::{CursorShape, Frame, RenderCell};
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// Font settings resolved to physical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontSpec {
+    pub family: String,
+    pub fallback: Vec<String>,
+    pub size_px: f32,
+    pub line_height: f32,
+    pub ligatures: bool,
+}
+
+/// One pane to draw: its frame and where it goes on the surface.
+pub struct PaneView<'a> {
+    pub rect: Rect,
+    pub frame: &'a Frame,
+    /// 0..1 strength of the visual-bell flash.
+    pub flash: f32,
+}
+
+/// The output surface + clear color for one `TermRenderer::render` call.
 pub struct FrameTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub width_px: u32,
     pub height_px: u32,
     pub clear_color: wgpu::Color,
-    /// Alpha to write for cell background quads (window opacity, 0-1).
-    /// Text glyphs are always drawn fully opaque -- only backgrounds fade,
-    /// matching how Ghostty/Kitty/Alacritty do window transparency.
+    /// Alpha for cell backgrounds (window opacity, 0-1). Text is always
+    /// drawn fully opaque -- only backgrounds fade, matching how
+    /// Ghostty/Kitty/Alacritty do window transparency.
     pub background_alpha: f32,
-    /// True when the surface's chosen `CompositeAlphaMode` is
-    /// `PreMultiplied`, in which case RGB must be pre-multiplied by alpha
-    /// before writing -- `PostMultiplied`/`Opaque` expect straight alpha.
+    /// True when the surface's `CompositeAlphaMode` is `PreMultiplied`, in
+    /// which case background RGB is pre-multiplied by alpha before writing.
     pub premultiply: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct RenderCell {
-    pub ch: char,
-    pub fg: [u8; 3],
-    pub bg: [u8; 3],
-}
-
-impl Default for RenderCell {
-    fn default() -> Self {
-        Self {
-            ch: ' ',
-            fg: [0xff, 0xff, 0xff],
-            bg: [0, 0, 0],
-        }
-    }
 }
 
 const QUAD_SHADER: &str = r#"
@@ -92,6 +113,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Instanced rectangles: 8 floats each (x, y, w, h, r, g, b, a).
+#[derive(Default)]
+struct Quads {
+    data: Vec<f32>,
+}
+
+impl Quads {
+    fn push(&mut self, x: f32, y: f32, w: f32, h: f32, rgba: [f32; 4]) {
+        if w > 0.0 && h > 0.0 {
+            self.data.extend_from_slice(&[x, y, w, h]);
+            self.data.extend_from_slice(&rgba);
+        }
+    }
+
+    /// Straight color with alpha, pre-multiplied for the overlay pipeline.
+    fn push_overlay(&mut self, x: f32, y: f32, w: f32, h: f32, rgb: [u8; 3], a: f32) {
+        let c = rgb.map(|v| v as f32 / 255.0 * a);
+        self.push(x, y, w, h, [c[0], c[1], c[2], a]);
+    }
+
+    fn count(&self) -> u32 {
+        (self.data.len() / 8) as u32
+    }
+
+    fn upload(&self, device: &wgpu::Device, label: &str) -> Option<wgpu::Buffer> {
+        (!self.data.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: &pack_f32s(&self.data),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        })
+    }
+}
+
+struct Segment {
+    col: usize,
+    buffer: Buffer,
+}
+
+struct CachedRow {
+    segments: Vec<Segment>,
+    last_used: u64,
+}
+
+/// Rows kept around after they leave the screen, so scrolling back and
+/// forth doesn't re-shape them.
+const ROW_CACHE_LIMIT: usize = 4096;
+
 pub struct TermRenderer {
     font_system: FontSystem,
     swash_cache: SwashCache,
@@ -99,21 +169,32 @@ pub struct TermRenderer {
     viewport: Viewport,
     atlas: TextAtlas,
     text_renderer: TextRenderer,
-    text_buffer: Buffer,
 
+    font: FontSpec,
+    metrics: Metrics,
     cell_width: f32,
     cell_height: f32,
 
-    quad_pipeline: wgpu::RenderPipeline,
-    quad_bind_group_layout: wgpu::BindGroupLayout,
+    rows: HashMap<u64, CachedRow>,
+    generation: u64,
+    /// Characters already checked against the loaded fonts, and whether
+    /// any of them (possibly after a fontconfig lookup) has a glyph.
+    coverage: HashMap<char, bool>,
+
+    bg_pipeline: wgpu::RenderPipeline,
+    overlay_pipeline: wgpu::RenderPipeline,
     quad_uniform_buffer: wgpu::Buffer,
     quad_bind_group: wgpu::BindGroup,
 }
 
 impl TermRenderer {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, format: wgpu::TextureFormat) -> Self {
-        let mut font_system = load_minimal_font_system();
-
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        font: FontSpec,
+    ) -> Self {
+        let mut font_system = load_font_system(&font);
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
@@ -121,97 +202,56 @@ impl TermRenderer {
         let text_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
 
-        // Matches the user's own Ghostty config (`font-size = 9`).
-        let font_size = 9.0;
-        let line_height = font_size * 1.25;
-        let metrics = Metrics::new(font_size, line_height);
-        let text_buffer = Buffer::new(&mut font_system, metrics);
+        let (metrics, cell_width, cell_height) = measure(&mut font_system, &font);
 
-        let (cell_width, cell_height) = measure_monospace_cell(&mut font_system, metrics);
-
-        // --- Solid-quad pipeline for cell backgrounds ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("cyberterm cell background shader"),
+            label: Some("cyberterm quad shader"),
             source: wgpu::ShaderSource::Wgsl(QUAD_SHADER.into()),
         });
-
-        let quad_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("cyberterm cell bg bind group layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cyberterm quad bind group layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
         let quad_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("cyberterm cell bg uniforms"),
+            label: Some("cyberterm quad uniforms"),
             size: 16,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-
         let quad_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("cyberterm cell bg bind group"),
-            layout: &quad_bind_group_layout,
+            label: Some("cyberterm quad bind group"),
+            layout: &bind_group_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: quad_uniform_buffer.as_entire_binding(),
             }],
         });
-
-        let quad_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("cyberterm cell bg pipeline layout"),
-            bind_group_layouts: &[&quad_bind_group_layout],
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cyberterm quad pipeline layout"),
+            bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let quad_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("cyberterm cell bg pipeline"),
-            layout: Some(&quad_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: 32,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 1,
-                        },
-                    ],
-                }],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Backgrounds overwrite exactly (so the window's alpha is exactly
+        // the configured opacity); overlays blend pre-multiplied color.
+        let bg_pipeline = quad_pipeline(device, &layout, &shader, format, None, "bg");
+        let overlay_pipeline = quad_pipeline(
+            device,
+            &layout,
+            &shader,
+            format,
+            Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            "overlay",
+        );
 
         Self {
             font_system,
@@ -220,37 +260,58 @@ impl TermRenderer {
             viewport,
             atlas,
             text_renderer,
-            text_buffer,
+            font,
+            metrics,
             cell_width,
             cell_height,
-            quad_pipeline,
-            quad_bind_group_layout,
+            rows: HashMap::new(),
+            generation: 0,
+            coverage: HashMap::new(),
+            bg_pipeline,
+            overlay_pipeline,
             quad_uniform_buffer,
             quad_bind_group,
         }
+    }
+
+    /// Applies a new font (size, family, fallback). Returns true when the
+    /// cell size changed, meaning panes need a resize.
+    pub fn set_font(&mut self, font: FontSpec) -> bool {
+        if font == self.font {
+            return false;
+        }
+        if font.family != self.font.family || font.fallback != self.font.fallback {
+            self.font_system = load_font_system(&font);
+            self.coverage.clear();
+        }
+        self.font = font;
+        let old = (self.cell_width, self.cell_height);
+        let (metrics, w, h) = measure(&mut self.font_system, &self.font);
+        self.metrics = metrics;
+        self.cell_width = w;
+        self.cell_height = h;
+        self.rows.clear();
+        old != (w, h)
     }
 
     pub fn cell_size(&self) -> (f32, f32) {
         (self.cell_width, self.cell_height)
     }
 
-    /// How many full columns/rows of cells fit in a surface of this pixel size.
-    pub fn grid_size(&self, width_px: u32, height_px: u32) -> (usize, usize) {
-        let cols = (width_px as f32 / self.cell_width).floor().max(1.0) as usize;
-        let rows = (height_px as f32 / self.cell_height).floor().max(1.0) as usize;
+    /// How many whole cells fit in a rectangle of this pixel size.
+    pub fn grid_size(&self, width_px: f32, height_px: f32) -> (usize, usize) {
+        let cols = (width_px / self.cell_width).floor().max(2.0) as usize;
+        let rows = (height_px / self.cell_height).floor().max(1.0) as usize;
         (cols, rows)
     }
 
-    /// Renders one full grid of cells (background quads, then glyph text) into
-    /// the given view, using the given command encoder. Call inside an active
-    /// frame, before `queue.submit`/`present`.
     pub fn render(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         target: FrameTarget<'_>,
-        rows: &[Vec<RenderCell>],
+        panes: &[PaneView<'_>],
     ) {
         let FrameTarget {
             view,
@@ -260,6 +321,7 @@ impl TermRenderer {
             background_alpha,
             premultiply,
         } = target;
+        self.generation += 1;
 
         queue.write_buffer(
             &self.quad_uniform_buffer,
@@ -267,80 +329,93 @@ impl TermRenderer {
             &pack_f32s(&[width_px as f32, height_px as f32, 0.0, 0.0]),
         );
 
-        // --- Background quads: one instance per contiguous same-color run ---
-        let mut quad_data: Vec<u8> = Vec::new();
-        let mut quad_count = 0u32;
-        for (row_idx, row) in rows.iter().enumerate() {
-            let y = row_idx as f32 * self.cell_height;
-            let mut col = 0usize;
-            while col < row.len() {
-                let color = row[col].bg;
-                let start = col;
-                while col < row.len() && row[col].bg == color {
-                    col += 1;
-                }
-                let x = start as f32 * self.cell_width;
-                let w = (col - start) as f32 * self.cell_width;
-                quad_data.extend_from_slice(&pack_f32s(&[x, y, w, self.cell_height]));
+        let mut bg = Quads::default();
+        let mut overlay = Quads::default();
+        // (row cache key, left, top, clip bounds)
+        let mut placements: Vec<(u64, f32, f32, TextBounds)> = Vec::new();
 
-                let mul = if premultiply { background_alpha } else { 1.0 };
-                quad_data.extend_from_slice(&pack_f32s(&[
-                    color[0] as f32 / 255.0 * mul,
-                    color[1] as f32 / 255.0 * mul,
-                    color[2] as f32 / 255.0 * mul,
-                    background_alpha,
-                ]));
-                quad_count += 1;
+        for pane in panes {
+            let frame = pane.frame;
+            let Rect { x: ox, y: oy, .. } = pane.rect;
+            let bounds = TextBounds {
+                left: pane.rect.x as i32,
+                top: pane.rect.y as i32,
+                right: (pane.rect.x + pane.rect.w).ceil() as i32,
+                bottom: (pane.rect.y + pane.rect.h).ceil() as i32,
+            };
+            let bg_alpha = background_alpha;
+            let bg_mul = if premultiply { bg_alpha } else { 1.0 };
+
+            for row in 0..frame.rows {
+                let cells = frame.row(row);
+                let y = oy + row as f32 * self.cell_height;
+
+                // Background runs. The default background is left to the
+                // clear color so padding and cells match exactly.
+                let mut col = 0;
+                while col < cells.len() {
+                    let color = cells[col].bg;
+                    let start = col;
+                    while col < cells.len() && cells[col].bg == color {
+                        col += 1;
+                    }
+                    if color != frame.bg {
+                        let c = color.map(|v| v as f32 / 255.0 * bg_mul);
+                        bg.push(
+                            ox + start as f32 * self.cell_width,
+                            y,
+                            (col - start) as f32 * self.cell_width,
+                            self.cell_height,
+                            [c[0], c[1], c[2], bg_alpha],
+                        );
+                    }
+                }
+
+                self.decorations(&mut overlay, cells, ox, y);
+
+                let key = row_key(cells);
+                if !self.rows.contains_key(&key) {
+                    let segments = self.shape_row(cells);
+                    self.rows.insert(
+                        key,
+                        CachedRow {
+                            segments,
+                            last_used: 0,
+                        },
+                    );
+                }
+                if let Some(cached) = self.rows.get_mut(&key) {
+                    cached.last_used = self.generation;
+                }
+                placements.push((key, ox, y, bounds));
+            }
+
+            if let Some(cursor) = frame.cursor {
+                self.cursor(&mut overlay, cursor, ox, oy);
+            }
+            self.scrollbar(&mut overlay, pane);
+            if pane.flash > 0.0 {
+                let fg = frame.row(0).first().map(|c| c.fg).unwrap_or([0xff; 3]);
+                overlay.push_overlay(ox, oy, pane.rect.w, pane.rect.h, fg, 0.2 * pane.flash);
             }
         }
 
-        let quad_buffer = (!quad_data.is_empty()).then(|| {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("cyberterm cell bg instances"),
-                contents: &quad_data,
-                usage: wgpu::BufferUsages::VERTEX,
-            })
-        });
-
-        // --- Text: one rich-text span run per contiguous same-fg-color range ---
-        let mut spans: Vec<(String, [u8; 3])> = Vec::new();
-        for row in rows {
-            let mut col = 0usize;
-            while col < row.len() {
-                let color = row[col].fg;
-                let mut text = String::new();
-                while col < row.len() && row[col].fg == color {
-                    text.push(row[col].ch);
-                    col += 1;
+        let mut text_areas = Vec::new();
+        for (key, left, top, bounds) in &placements {
+            if let Some(cached) = self.rows.get(key) {
+                for seg in &cached.segments {
+                    text_areas.push(TextArea {
+                        buffer: &seg.buffer,
+                        left: left + seg.col as f32 * self.cell_width,
+                        top: *top,
+                        scale: 1.0,
+                        bounds: *bounds,
+                        default_color: GlyphonColor::rgb(255, 255, 255),
+                        custom_glyphs: &[],
+                    });
                 }
-                spans.push((text, color));
             }
-            spans.push(("\n".to_string(), [0, 0, 0]));
         }
-
-        let attrs_spans: Vec<(&str, Attrs)> = spans
-            .iter()
-            .map(|(text, color)| {
-                let attrs = Attrs::new()
-                    .family(Family::Monospace)
-                    .color(GlyphonColor::rgb(color[0], color[1], color[2]));
-                (text.as_str(), attrs)
-            })
-            .collect();
-
-        self.text_buffer.set_size(
-            &mut self.font_system,
-            Some(width_px as f32),
-            Some(height_px as f32),
-        );
-        self.text_buffer.set_rich_text(
-            &mut self.font_system,
-            attrs_spans,
-            Attrs::new().family(Family::Monospace),
-            Shaping::Advanced,
-        );
-        self.text_buffer
-            .shape_until_scroll(&mut self.font_system, false);
 
         self.viewport.update(
             queue,
@@ -349,32 +424,20 @@ impl TermRenderer {
                 height: height_px,
             },
         );
+        if let Err(e) = self.text_renderer.prepare(
+            device,
+            queue,
+            &mut self.font_system,
+            &mut self.atlas,
+            &self.viewport,
+            text_areas,
+            &mut self.swash_cache,
+        ) {
+            eprintln!("cyberterm: text prepare failed: {e:?}");
+        }
 
-        self.text_renderer
-            .prepare(
-                device,
-                queue,
-                &mut self.font_system,
-                &mut self.atlas,
-                &self.viewport,
-                [TextArea {
-                    buffer: &self.text_buffer,
-                    left: 0.0,
-                    top: 0.0,
-                    scale: 1.0,
-                    bounds: TextBounds {
-                        left: 0,
-                        top: 0,
-                        right: width_px as i32,
-                        bottom: height_px as i32,
-                    },
-                    default_color: GlyphonColor::rgb(255, 255, 255),
-                    custom_glyphs: &[],
-                }],
-                &mut self.swash_cache,
-            )
-            .unwrap();
-
+        let bg_buf = bg.upload(device, "cyberterm bg quads");
+        let overlay_buf = overlay.upload(device, "cyberterm overlay quads");
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("cyberterm frame pass"),
@@ -391,121 +454,463 @@ impl TermRenderer {
                 occlusion_query_set: None,
             });
 
-            if let Some(buf) = &quad_buffer {
-                pass.set_pipeline(&self.quad_pipeline);
+            if let Some(buf) = &bg_buf {
+                pass.set_pipeline(&self.bg_pipeline);
                 pass.set_bind_group(0, &self.quad_bind_group, &[]);
                 pass.set_vertex_buffer(0, buf.slice(..));
-                pass.draw(0..6, 0..quad_count);
+                pass.draw(0..6, 0..bg.count());
             }
 
-            self.text_renderer
+            if let Err(e) = self
+                .text_renderer
                 .render(&self.atlas, &self.viewport, &mut pass)
-                .unwrap();
+            {
+                eprintln!("cyberterm: text render failed: {e:?}");
+            }
+
+            if let Some(buf) = &overlay_buf {
+                pass.set_pipeline(&self.overlay_pipeline);
+                pass.set_bind_group(0, &self.quad_bind_group, &[]);
+                pass.set_vertex_buffer(0, buf.slice(..));
+                pass.draw(0..6, 0..overlay.count());
+            }
         }
 
         self.atlas.trim();
-        let _ = &self.quad_bind_group_layout; // kept alive alongside the pipeline it describes
+        self.evict_rows();
+    }
+
+    fn evict_rows(&mut self) {
+        if self.rows.len() <= ROW_CACHE_LIMIT {
+            return;
+        }
+        let mut ages: Vec<u64> = self.rows.values().map(|r| r.last_used).collect();
+        ages.sort_unstable();
+        let cutoff = ages[ages.len() - ROW_CACHE_LIMIT / 2];
+        let current = self.generation;
+        self.rows
+            .retain(|_, r| r.last_used >= cutoff || r.last_used == current);
+    }
+
+    /// Makes sure some loaded font can draw `ch`. Only the configured
+    /// families are loaded up front (see `load_font_system`), so the first
+    /// time a character none of them covers shows up (CJK, rare symbols),
+    /// fontconfig is asked for a font that has it and that font is added.
+    fn ensure_coverage(&mut self, ch: char) {
+        if self.coverage.contains_key(&ch) {
+            return;
+        }
+        let ids: Vec<_> = self.font_system.db().faces().map(|f| f.id).collect();
+        let mut covered = ids.into_iter().any(|id| {
+            self.font_system
+                .get_font(id)
+                .is_some_and(|font| font.rustybuzz().glyph_index(ch).is_some())
+        });
+        if !covered {
+            let query = format!(":charset={:x}", ch as u32);
+            if let Some(path) = font_files_matching(&query).into_iter().next() {
+                let already =
+                    self.font_system.db().faces().any(
+                        |f| matches!(&f.source, glyphon::fontdb::Source::File(p) if *p == path),
+                    );
+                if !already {
+                    let _ = self.font_system.db_mut().load_font_file(&path);
+                    covered = true;
+                }
+            }
+        }
+        self.coverage.insert(ch, covered);
+    }
+
+    /// Cuts a row into shaped, column-positioned text segments.
+    fn shape_row(&mut self, cells: &[RenderCell]) -> Vec<Segment> {
+        for cell in cells {
+            if !cell.ch.is_ascii() && !boxdraw::is_drawn(cell.ch) {
+                self.ensure_coverage(cell.ch);
+            }
+        }
+        let mut segments = Vec::new();
+        let mut run: Option<(usize, Vec<(String, Style8)>)> = None;
+        let family = Family::Monospace;
+        let metrics = self.metrics;
+        let ligatures = self.font.ligatures;
+        let fs = &mut self.font_system;
+
+        let flush = |run: &mut Option<(usize, Vec<(String, Style8)>)>,
+                     segments: &mut Vec<Segment>,
+                     fs: &mut FontSystem| {
+            if let Some((col, spans)) = run.take() {
+                if spans.iter().all(|(t, _)| t.trim().is_empty()) {
+                    return;
+                }
+                let shaping = if ligatures {
+                    Shaping::Advanced
+                } else {
+                    Shaping::Basic
+                };
+                segments.push(Segment {
+                    col,
+                    buffer: make_buffer(fs, metrics, family, &spans, shaping),
+                });
+            }
+        };
+
+        for (col, cell) in cells.iter().enumerate() {
+            if cell.is_spacer() {
+                continue;
+            }
+            if boxdraw::is_drawn(cell.ch) {
+                // Drawn as rectangles in `decorations`.
+                flush(&mut run, &mut segments, fs);
+                continue;
+            }
+            let style = Style8::of(cell);
+            let simple = cell.ch.is_ascii()
+                && !cell.ch.is_ascii_control()
+                && cell.zerowidth.is_none()
+                && !cell.flags.contains(Flags::WIDE_CHAR);
+            if simple {
+                if cell.ch == ' ' && run.is_none() {
+                    continue;
+                }
+                let (_, spans) = run.get_or_insert_with(|| (col, Vec::new()));
+                match spans.last_mut() {
+                    Some((text, s)) if *s == style => text.push(cell.ch),
+                    _ => spans.push((cell.ch.to_string(), style)),
+                }
+            } else {
+                flush(&mut run, &mut segments, fs);
+                let mut text = cell.ch.to_string();
+                if let Some(extra) = &cell.zerowidth {
+                    text.extend(extra.iter());
+                }
+                if text.trim().is_empty() || cell.ch.is_control() {
+                    continue;
+                }
+                segments.push(Segment {
+                    col,
+                    buffer: make_buffer(fs, metrics, family, &[(text, style)], Shaping::Advanced),
+                });
+            }
+        }
+        flush(&mut run, &mut segments, fs);
+        segments
+    }
+
+    fn decorations(&self, quads: &mut Quads, cells: &[RenderCell], ox: f32, y: f32) {
+        let cw = self.cell_width;
+        let font_px = self.font.size_px;
+        let thick = (font_px / 14.0).round().max(1.0);
+        let pad = (self.cell_height - font_px) / 2.0;
+        let underline_y = (y + pad + font_px * 0.82 + thick).round();
+        let strike_y = (y + pad + font_px * 0.5).round();
+
+        for (col, cell) in cells.iter().enumerate() {
+            let x = ox + col as f32 * cw;
+            if let Some(pieces) = boxdraw::pieces(cell.ch, x, y, cw, self.cell_height, thick) {
+                for p in pieces {
+                    quads.push_overlay(p.x, p.y, p.w, p.h, cell.fg, p.alpha);
+                }
+            }
+            let color = cell.underline_color.unwrap_or(cell.fg);
+            let f = cell.flags;
+            if f.contains(Flags::UNDERLINE) || cell.link_hover {
+                quads.push_overlay(
+                    x,
+                    underline_y,
+                    cw,
+                    thick,
+                    if cell.link_hover { cell.fg } else { color },
+                    1.0,
+                );
+            }
+            if f.contains(Flags::DOUBLE_UNDERLINE) {
+                quads.push_overlay(x, underline_y - thick, cw, thick, color, 1.0);
+                quads.push_overlay(x, underline_y + thick, cw, thick, color, 1.0);
+            }
+            if f.contains(Flags::UNDERCURL) {
+                // A small triangle wave, four steps per cell.
+                let step = cw / 4.0;
+                for (i, lift) in [0.0, 1.0, 2.0, 1.0].iter().enumerate() {
+                    quads.push_overlay(
+                        x + i as f32 * step,
+                        underline_y - lift * thick,
+                        step,
+                        thick,
+                        color,
+                        1.0,
+                    );
+                }
+            }
+            if f.contains(Flags::DOTTED_UNDERLINE) {
+                let mut dx = 0.0;
+                while dx < cw {
+                    quads.push_overlay(x + dx, underline_y, thick.min(cw - dx), thick, color, 1.0);
+                    dx += thick * 2.0;
+                }
+            }
+            if f.contains(Flags::DASHED_UNDERLINE) {
+                quads.push_overlay(x, underline_y, cw * 0.6, thick, color, 1.0);
+            }
+            if f.contains(Flags::STRIKEOUT) {
+                quads.push_overlay(x, strike_y, cw, thick, cell.fg, 1.0);
+            }
+        }
+    }
+
+    fn cursor(&self, quads: &mut Quads, cursor: crate::frame::CursorDraw, ox: f32, oy: f32) {
+        let (cw, ch) = (self.cell_width, self.cell_height);
+        let x = ox + cursor.col as f32 * cw;
+        let y = oy + cursor.row as f32 * ch;
+        let w = if cursor.wide { cw * 2.0 } else { cw };
+        let thick = (cw / 8.0).round().max(1.0);
+        match cursor.shape {
+            // Drawn by inverting the cell itself (frame.rs).
+            CursorShape::Block => {}
+            CursorShape::Beam => quads.push_overlay(x, y, thick, ch, cursor.color, 1.0),
+            CursorShape::Underline => {
+                quads.push_overlay(x, y + ch - thick, w, thick, cursor.color, 1.0)
+            }
+            CursorShape::Hollow => {
+                quads.push_overlay(x, y, w, 1.0, cursor.color, 1.0);
+                quads.push_overlay(x, y + ch - 1.0, w, 1.0, cursor.color, 1.0);
+                quads.push_overlay(x, y, 1.0, ch, cursor.color, 1.0);
+                quads.push_overlay(x + w - 1.0, y, 1.0, ch, cursor.color, 1.0);
+            }
+        }
+    }
+
+    /// A thin position indicator while scrolled back into history.
+    fn scrollbar(&self, quads: &mut Quads, pane: &PaneView<'_>) {
+        let frame = pane.frame;
+        if frame.display_offset == 0 || frame.history == 0 {
+            return;
+        }
+        let total = (frame.history + frame.rows) as f32;
+        let h = (pane.rect.h * frame.rows as f32 / total).max(16.0);
+        // 0 at the top of the scrollback, 1 at the live screen.
+        let position = (frame.history - frame.display_offset) as f32 / frame.history as f32;
+        let y = pane.rect.y + (pane.rect.h - h) * position;
+        let w = (self.cell_width / 2.0).max(3.0);
+        let fg = frame.row(0).first().map(|c| c.fg).unwrap_or([0xff; 3]);
+        quads.push_overlay(pane.rect.x + pane.rect.w - w, y, w, h, fg, 0.45);
     }
 }
 
-/// Builds a `FontSystem` around a *minimal* font database (just the one
-/// monospace font this terminal actually renders with) instead of
-/// `FontSystem::new()`'s default full system font scan.
+/// The text attributes that change shaping or glyph color.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct Style8 {
+    fg: [u8; 3],
+    bold: bool,
+    italic: bool,
+}
+
+impl Style8 {
+    fn of(cell: &RenderCell) -> Self {
+        Self {
+            fg: cell.fg,
+            bold: cell.flags.contains(Flags::BOLD),
+            italic: cell.flags.contains(Flags::ITALIC),
+        }
+    }
+}
+
+fn row_key(cells: &[RenderCell]) -> u64 {
+    let mut h = DefaultHasher::new();
+    for cell in cells {
+        cell.ch.hash(&mut h);
+        cell.zerowidth.hash(&mut h);
+        Style8::of(cell).hash(&mut h);
+        cell.is_spacer().hash(&mut h);
+    }
+    h.finish()
+}
+
+fn make_buffer(
+    fs: &mut FontSystem,
+    metrics: Metrics,
+    family: Family<'_>,
+    spans: &[(String, Style8)],
+    shaping: Shaping,
+) -> Buffer {
+    let mut buffer = Buffer::new(fs, metrics);
+    buffer.set_size(fs, None, None);
+    let attrs = |s: &Style8| {
+        Attrs::new()
+            .family(family)
+            .weight(if s.bold { Weight::BOLD } else { Weight::NORMAL })
+            .style(if s.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            })
+            .color(GlyphonColor::rgb(s.fg[0], s.fg[1], s.fg[2]))
+    };
+    buffer.set_rich_text(
+        fs,
+        spans.iter().map(|(text, s)| (text.as_str(), attrs(s))),
+        Attrs::new().family(family),
+        shaping,
+    );
+    buffer.shape_until_scroll(fs, false);
+    buffer
+}
+
+fn quad_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+    blend: Option<wgpu::BlendState>,
+    label: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(&format!("cyberterm {label} quad pipeline")),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[wgpu::VertexBufferLayout {
+                array_stride: 32,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 1,
+                    },
+                ],
+            }],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview: None,
+        cache: None,
+    })
+}
+
+/// Builds a `FontSystem` around only the configured families instead of
+/// `FontSystem::new()`'s full system scan, which parses every installed
+/// font file -- several seconds on a machine with ~10,000 font files, the
+/// dominant cost of a startup delay easily mistaken for a hang.
+/// fontconfig's own cache resolves each family to its files in milliseconds.
 ///
-/// `FontSystem::new()` parses metadata for every installed font file to
-/// support fallback -- cosmic-text's own docs note this "can take up to a
-/// second" on a release build. On a box with an unusually large font corpus
-/// (~10,000 files between `/usr/share/fonts` and `~/.fonts` here), that
-/// scan alone took several seconds, the dominant cost of a startup delay
-/// easily mistaken for a hang. A single `fc-match` call resolves the actual
-/// font file via fontconfig's own cache (~150ms flat, independent of how
-/// many fonts are installed) instead.
-fn load_minimal_font_system() -> FontSystem {
-    // The Nerd Font variant, not plain "JetBrains Mono" -- shell prompts
-    // (starship, etc.) commonly use Nerd Font private-use-area glyphs for
-    // OS/git/language icons. Loading only the plain font renders those as
-    // empty tofu boxes even though everything else (directory, branch name,
-    // real text) is correctly styled -- it looks like the prompt is broken
-    // when it's actually just missing icon glyphs.
-    const FONT_FAMILY: &str = "JetBrainsMono Nerd Font";
-    // A per-font Nerd Font patch can still be missing icons a given prompt
-    // config uses (patch sets vary by version/glyph set). "Symbols Nerd
-    // Font Mono" is the dedicated icon-only glyph superset the Nerd Fonts
-    // project ships specifically as a fallback source for exactly this --
-    // it's what kitty itself references (/usr/lib/kitty/fonts/) for the
-    // same reason. Loading it as a second font lets cosmic-text's
-    // `Shaping::Advanced` fallback (see `shape.rs`'s `FontFallbackIter`)
-    // pick up any icon glyph the primary font's patch doesn't have.
-    const SYMBOLS_FALLBACK_FAMILY: &str = "Symbols Nerd Font Mono";
-    // Real color emoji (git_status icons like untracked/stashed/deleted in
-    // this user's starship config use actual emoji codepoints, not Nerd
-    // Font glyphs) -- glyphon 0.8 has a dedicated color glyph atlas
-    // (`text_atlas.rs`'s `ContentType::Color`) specifically for this, and
-    // swash rasterizes Noto Color Emoji's bitmap glyphs correctly (verified
-    // directly: a real RGBA image comes back, not a failure).
-    const EMOJI_FALLBACK_FAMILY: &str = "Noto Color Emoji";
-
+/// The defaults matter: the Nerd Font variant of JetBrains Mono for prompt
+/// icons, "Symbols Nerd Font Mono" for icons a given patch set lacks, and
+/// "Noto Color Emoji" for real color emoji (glyphon has a color atlas).
+fn load_font_system(font: &FontSpec) -> FontSystem {
     let mut db = glyphon::fontdb::Database::new();
-    db.set_monospace_family(FONT_FAMILY);
+    let mut primary_name = None;
 
-    for family in [FONT_FAMILY, SYMBOLS_FALLBACK_FAMILY, EMOJI_FALLBACK_FAMILY] {
-        if let Some(path) = resolve_font_path(family) {
+    for (i, family) in std::iter::once(&font.family)
+        .chain(font.fallback.iter())
+        .enumerate()
+    {
+        let before: HashSet<_> = db.faces().map(|f| f.id).collect();
+        for path in font_files(family) {
             let _ = db.load_font_file(&path);
+        }
+        if i == 0 {
+            // The name *inside* the font, which can differ from what the
+            // user typed ("JetBrains Mono" vs "JetBrainsMono Nerd Font").
+            primary_name = db
+                .faces()
+                .find(|f| !before.contains(&f.id))
+                .and_then(|f| f.families.first().map(|(name, _)| name.clone()));
         }
     }
 
     if db.faces().next().is_none() {
-        // `fc-match` missing or found nothing usable -- fall back to the
-        // full, slower system scan rather than rendering with zero fonts.
+        // fontconfig missing or found nothing -- fall back to the full,
+        // slower system scan rather than rendering with zero fonts.
         return FontSystem::new();
     }
-
+    db.set_monospace_family(primary_name.unwrap_or_else(|| font.family.clone()));
     FontSystem::new_with_locale_and_db("en-US".to_string(), db)
 }
 
-/// Resolves a font family name to its actual file path via `fc-match`
-/// (fontconfig's own CLI, present on virtually every Linux desktop),
-/// without touching cosmic-text/fontdb's own full-corpus scan.
-fn resolve_font_path(family: &str) -> Option<std::path::PathBuf> {
-    let output = std::process::Command::new("fc-match")
-        .args(["-f", "%{file}", family])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+/// Every file of a family (regular, bold, italic, ...) via `fc-list`,
+/// falling back to `fc-match`'s single best file for fuzzy names.
+fn font_files(family: &str) -> Vec<std::path::PathBuf> {
+    let run = |args: &[&str]| -> Vec<std::path::PathBuf> {
+        std::process::Command::new(args[0])
+            .args(&args[1..])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let files = run(&["fc-list", family, "-f", "%{file}\n"]);
+    if !files.is_empty() {
+        return files;
     }
-    let path = String::from_utf8(output.stdout).ok()?;
-    let path = path.trim();
-    (!path.is_empty()).then(|| std::path::PathBuf::from(path))
+    font_files_matching(family)
 }
 
-/// Shapes a single "M" glyph in the given metrics/monospace family to read
-/// its real advance width off the font, instead of guessing an aspect-ratio
-/// constant -- this is what makes column alignment correct for whatever
-/// monospace font is actually installed (JetBrains Mono here).
-fn measure_monospace_cell(font_system: &mut FontSystem, metrics: Metrics) -> (f32, f32) {
+/// fontconfig's single best file for a pattern (`"JetBrains Mono"`,
+/// `":charset=65e5"`).
+fn font_files_matching(pattern: &str) -> Vec<std::path::PathBuf> {
+    std::process::Command::new("fc-match")
+        .args(["-f", "%{file}", pattern])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|p| !p.is_empty())
+        .map(|p| vec![std::path::PathBuf::from(p)])
+        .unwrap_or_default()
+}
+
+/// Cell size from the font's real advance width, so column alignment is
+/// right for whatever monospace font is installed.
+fn measure(font_system: &mut FontSystem, font: &FontSpec) -> (Metrics, f32, f32) {
+    let line_height = (font.size_px * font.line_height).round().max(1.0);
+    let metrics = Metrics::new(font.size_px, line_height);
     let mut probe = Buffer::new(font_system, metrics);
-    probe.set_size(font_system, Some(1000.0), Some(1000.0));
+    probe.set_size(font_system, None, None);
     probe.set_text(
         font_system,
-        "M",
+        "0000000000",
         Attrs::new().family(Family::Monospace),
-        Shaping::Advanced,
+        Shaping::Basic,
     );
     probe.shape_until_scroll(font_system, false);
-
     let width = probe
         .layout_runs()
         .next()
-        .and_then(|run| run.glyphs.first())
-        .map(|glyph| glyph.w)
-        .unwrap_or(metrics.font_size * 0.6);
-
-    (width, metrics.line_height)
+        .map(|run| run.line_w / 10.0)
+        .filter(|w| *w > 0.0)
+        .unwrap_or(font.size_px * 0.6);
+    (metrics, width, line_height)
 }
 
 /// Packs an f32 slice into little-endian bytes for a GPU buffer write,
-/// without pulling in `bytemuck` as a dependency for a handful of floats.
+/// without pulling in `bytemuck` for a handful of floats.
 fn pack_f32s(values: &[f32]) -> Vec<u8> {
     values.iter().flat_map(|v| v.to_le_bytes()).collect()
 }
