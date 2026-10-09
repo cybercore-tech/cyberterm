@@ -114,6 +114,17 @@ ignore = []
 # (another window, tab or pane). 0 turns it off.
 long_command_seconds = 10
 
+[agents]
+# AI agents (Claude Code, Codex, Gemini CLI, ...) connect through
+# `cyberterm +mcp`. Each policy is "ask" (prompt in the window), "allow"
+# or "deny". Reading covers a pane's text and recent commands; writing
+# covers typing into a pane and running commands in a new pane.
+enabled = true
+read = "ask"
+write = "ask"
+# Log every agent request to ~/.local/state/cyberterm/agents.log.
+audit_log = true
+
 [daemon]
 # Keep shells in a background session daemon: closing (or crashing) the
 # window only detaches, and `cyberterm` / `cyberterm +attach` brings your

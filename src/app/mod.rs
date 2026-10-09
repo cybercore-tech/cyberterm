@@ -42,6 +42,7 @@ use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
 use crate::ui::context_menu;
 
+mod agents;
 mod blocks;
 mod control;
 mod daemon;
@@ -132,6 +133,7 @@ enum MenuAction {
     Watch(String, Option<PathBuf>),
     Diff(blocks::BlockRef, crate::shell::BlockMeta),
     ViewJson(blocks::BlockRef),
+    RevokeAgents(PaneId),
 }
 
 /// An open right-click menu, anchored at a cell of the focused pane.
@@ -206,6 +208,8 @@ pub struct App {
     /// The find bar (Ctrl+Shift+F) and history browser (Ctrl+Shift+H).
     find: Option<overlays::FindState>,
     history_ui: Option<overlays::HistoryUi>,
+    /// AI agents' pending consent prompts, grants and badges.
+    agents: agents::AgentState,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -285,6 +289,7 @@ impl App {
             history: None,
             find: None,
             history_ui: None,
+            agents: agents::AgentState::default(),
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -802,6 +807,10 @@ impl App {
                     self.draw_find(&mut frame);
                 }
             }
+            self.draw_agent_badge(pane.id, &mut frame);
+            if focused {
+                self.draw_consent(&mut frame);
+            }
             list.panes.push((rect, frame, flash, dim));
         }
 
@@ -866,6 +875,7 @@ impl App {
     }
 
     fn draw(&mut self) {
+        self.expire_consents();
         self.refresh_overlays();
         let list = self.build_frames();
         let Some(gpu) = &mut self.gpu else { return };
@@ -1185,9 +1195,7 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Term(id, event) => self.on_term_event(event_loop, id, event),
             UserEvent::DaemonLost(reason) => self.daemon_lost(&reason),
             UserEvent::Control(call) => {
-                let id = call.request.id.clone();
-                let outcome = self.on_control(call.request);
-                let _ = call.reply.send(crate::control::Response::new(id, outcome));
+                self.on_control_call(call);
                 if self.exit_requested {
                     event_loop.exit();
                 }

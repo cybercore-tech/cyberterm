@@ -15,6 +15,7 @@ mod input;
 mod json_viewer;
 mod layout;
 mod layout_file;
+mod mcp;
 mod mux;
 mod renderer;
 mod session;

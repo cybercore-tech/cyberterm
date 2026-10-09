@@ -158,6 +158,7 @@ impl App {
             return;
         };
         let was_focused = id == self.focused;
+        self.forget_pane_agents(id);
         self.panes.remove(index);
 
         let Some(tab_index) = self.tabs.iter().position(|t| t.root.contains(id)) else {
