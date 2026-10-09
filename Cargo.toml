@@ -28,6 +28,7 @@ toml = "0.8"
 toml_edit = "0.22"              # Comment-preserving edits when saving theme/opacity
 serde_json = "1.0.150"
 cybercore = "0.8"
+libc = "0.2"                    # termios raw mode + window size for the terminal attach client
 
 # Wayland clipboard + primary selection through the window's own
 # connection (what Alacritty uses). Setting the primary selection via the

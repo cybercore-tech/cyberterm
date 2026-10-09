@@ -457,7 +457,7 @@ fn handle(msg: ClientMsg, client: ClientId, tx: &Sender<Frame>, hub: &Arc<Mutex<
                 panes: Vec::new(),
             });
         }
-        ClientMsg::Attach { name } => {
+        ClientMsg::Attach { name, force } => {
             let mut h = hub.lock();
             h.detach(client);
             let picked = match name {
@@ -481,12 +481,26 @@ fn handle(msg: ClientMsg, client: ClientId, tx: &Sender<Frame>, hub: &Arc<Mutex<
                 });
                 return;
             };
-            if session.attached.is_some() {
-                reply(ServerMsg::Error {
-                    message: format!("session `{name}` is attached to another window"),
-                });
-                return;
+            if let Some(other) = session.attached.filter(|c| *c != client) {
+                if !force {
+                    reply(ServerMsg::Error {
+                        message: format!(
+                            "session `{name}` is attached elsewhere (use --force to take it over)"
+                        ),
+                    });
+                    return;
+                }
+                h.detach(other);
+                h.send(
+                    other,
+                    &ServerMsg::Detached {
+                        reason: format!("session `{name}` was attached from another terminal"),
+                    },
+                );
             }
+            let Some(session) = h.sessions.get_mut(&name) else {
+                return;
+            };
             session.attached = Some(client);
             session.detached_at = None;
             let layout = session.layout.clone();
@@ -1004,7 +1018,10 @@ mod tests {
 
         // Second window: reattach and get the same screen back.
         let mut b = Conn::open(&path);
-        b.send(&ClientMsg::Attach { name: None });
+        b.send(&ClientMsg::Attach {
+            name: None,
+            force: false,
+        });
         let (layout, panes) = match b.next_msg() {
             ServerMsg::SessionReady {
                 name,
@@ -1038,6 +1055,7 @@ mod tests {
         let mut c = Conn::open(&path);
         c.send(&ClientMsg::Attach {
             name: Some("work".into()),
+            force: false,
         });
         assert!(matches!(c.next_msg(), ServerMsg::Error { .. }));
 
@@ -1051,9 +1069,22 @@ mod tests {
             }
             other => panic!("expected Sessions, got {other:?}"),
         }
-        b.input(pane, "exit\n");
+        // --force takes the session over; the old client is told.
+        c.send(&ClientMsg::Attach {
+            name: Some("work".into()),
+            force: true,
+        });
+        assert!(matches!(c.next_msg(), ServerMsg::SessionReady { .. }));
+        assert!(matches!(c.next(), Frame::Snapshot(id, _) if id == pane));
         loop {
-            if let ServerMsg::PaneExited { pane: gone } = b.next_msg() {
+            if let ServerMsg::Detached { .. } = b.next_msg() {
+                break;
+            }
+        }
+
+        c.input(pane, "exit\n");
+        loop {
+            if let ServerMsg::PaneExited { pane: gone } = c.next_msg() {
                 assert_eq!(gone, pane);
                 break;
             }

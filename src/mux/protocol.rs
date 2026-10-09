@@ -173,6 +173,9 @@ pub enum ClientMsg {
     /// Attach to a session; `None` picks the most recently detached one.
     Attach {
         name: Option<String>,
+        /// Take the session over from a client that has it attached.
+        #[serde(default)]
+        force: bool,
     },
     Spawn {
         req: u64,
@@ -248,6 +251,10 @@ pub enum ServerMsg {
     Error {
         message: String,
     },
+    /// This client was detached (another one took the session over).
+    Detached {
+        reason: String,
+    },
 }
 
 impl ServerMsg {
@@ -279,6 +286,7 @@ mod tests {
         roundtrip(Frame::Snapshot(u32::MAX, vec![0; 1000]));
         roundtrip(Frame::json(&ClientMsg::Attach {
             name: Some("work".into()),
+            force: false,
         }));
     }
 

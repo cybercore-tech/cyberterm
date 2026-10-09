@@ -21,11 +21,10 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use alacritty_terminal::Term;
 use parking_lot::Mutex;
-use winit::event_loop::EventLoopProxy;
 
 use super::protocol::{ClientMsg, Frame, PaneInfo, ServerMsg, Size, VERSION};
 use super::server::socket_path;
-use crate::session::{EventProxy, GridSize, PaneId, UserEvent};
+use crate::session::{EventProxy, EventSink, GridSize, PaneId, UserEvent};
 use crate::shell::ShellState;
 
 const REPLY_TIMEOUT: Duration = Duration::from_secs(5);
@@ -76,7 +75,7 @@ fn shell_state(info: &super::protocol::ShellInfo) -> ShellState {
 
 impl DaemonClient {
     /// Connects to the daemon, starting it first if it isn't running.
-    pub fn connect_or_start(proxy: EventLoopProxy<UserEvent>) -> io::Result<Arc<Self>> {
+    pub fn connect_or_start(sink: EventSink) -> io::Result<Arc<Self>> {
         let path = socket_path();
         let stream = match UnixStream::connect(&path) {
             Ok(s) => s,
@@ -92,7 +91,7 @@ impl DaemonClient {
                 }
             }
         };
-        Self::start(stream, Some(proxy))
+        Self::start(stream, Some(sink))
     }
 
     /// Connects without starting anything (for CLI queries).
@@ -100,10 +99,7 @@ impl DaemonClient {
         Self::start(UnixStream::connect(socket_path())?, None)
     }
 
-    fn start(
-        stream: UnixStream,
-        proxy: Option<EventLoopProxy<UserEvent>>,
-    ) -> io::Result<Arc<Self>> {
+    fn start(stream: UnixStream, sink: Option<EventSink>) -> io::Result<Arc<Self>> {
         let read_half = stream.try_clone()?;
         let client = Arc::new(Self {
             writer: Mutex::new(stream),
@@ -119,7 +115,7 @@ impl DaemonClient {
         );
         std::thread::Builder::new()
             .name("daemon reader".into())
-            .spawn(move || read_loop(read_half, proxy, pending, ready, replicas))?;
+            .spawn(move || read_loop(read_half, sink, pending, ready, replicas))?;
         client.send(&ClientMsg::Hello {
             version: VERSION.into(),
         })?;
@@ -175,11 +171,14 @@ impl DaemonClient {
         self.session(ClientMsg::NewSession { name })
     }
 
+    /// Attaches to a session. `force` takes it over from another client
+    /// (which is told it was detached).
     pub fn attach(
         &self,
         name: Option<String>,
+        force: bool,
     ) -> io::Result<(String, serde_json::Value, Vec<PaneInfo>)> {
-        self.session(ClientMsg::Attach { name })
+        self.session(ClientMsg::Attach { name, force })
     }
 
     /// Starts a shell in the attached session; its replica is ready when
@@ -221,6 +220,11 @@ impl DaemonClient {
     pub fn forget(&self, pane: PaneId) {
         self.replicas.lock().remove(&pane);
     }
+
+    /// Closes the connection (this client won't use the daemon again).
+    pub fn close(&self) {
+        let _ = self.writer.lock().shutdown(std::net::Shutdown::Both);
+    }
 }
 
 /// Starts `cyberterm +daemon` detached from this process: its own process
@@ -243,9 +247,9 @@ fn start_daemon() -> io::Result<()> {
     Ok(())
 }
 
-fn new_replica(info: &PaneInfo, proxy: &EventLoopProxy<UserEvent>) -> Replica {
+fn new_replica(info: &PaneInfo, sink: &EventSink) -> Replica {
     let config = super::term_config(&info.settings);
-    let listener = EventProxy::new(info.id, proxy.clone());
+    let listener = EventProxy::new(info.id, sink.clone());
     Replica {
         term: Arc::new(FairMutex::new(Term::new(
             config,
@@ -261,15 +265,15 @@ fn new_replica(info: &PaneInfo, proxy: &EventLoopProxy<UserEvent>) -> Replica {
 
 fn read_loop(
     stream: UnixStream,
-    proxy: Option<EventLoopProxy<UserEvent>>,
+    sink: Option<EventSink>,
     pending: Arc<Mutex<HashMap<u64, Sender<ServerMsg>>>>,
     ready: Arc<Mutex<Option<Sender<ServerMsg>>>>,
     replicas: Replicas,
 ) {
     let mut reader = BufReader::new(stream);
     let wake = |pane: PaneId, event: TermEvent| {
-        if let Some(proxy) = &proxy {
-            let _ = proxy.send_event(UserEvent::Term(pane, event));
+        if let Some(sink) = &sink {
+            sink(UserEvent::Term(pane, event));
         }
     };
     while let Ok(Some(frame)) = Frame::read_from(&mut reader) {
@@ -286,7 +290,7 @@ fn read_loop(
                     let mut term = r.term.lock();
                     let size = grid(r.info.size);
                     let listener =
-                        EventProxy::new(pane, proxy.clone().expect("replicas need a window"));
+                        EventProxy::new(pane, sink.clone().expect("replicas need an event sink"));
                     *term = Term::new(super::term_config(&r.info.settings), &size, listener);
                     r.parser = Processor::new();
                     r.parser.advance(&mut *term, &bytes);
@@ -299,21 +303,27 @@ fn read_loop(
                 };
                 match &msg {
                     ServerMsg::SessionReady { panes, .. } => {
-                        if let Some(proxy) = &proxy {
+                        if let Some(sink) = &sink {
                             let mut map = replicas.lock();
                             for info in panes {
-                                map.insert(info.id, new_replica(info, proxy));
+                                map.insert(info.id, new_replica(info, sink));
                             }
                         }
                     }
                     ServerMsg::Spawned { pane, .. } => {
-                        if let Some(proxy) = &proxy {
-                            replicas.lock().insert(pane.id, new_replica(pane, proxy));
+                        if let Some(sink) = &sink {
+                            replicas.lock().insert(pane.id, new_replica(pane, sink));
                         }
                     }
                     ServerMsg::ShellState { pane, shell } => {
                         if let Some(r) = replicas.lock().get(pane) {
                             *r.shell.lock() = shell_state(shell);
+                        }
+                        continue;
+                    }
+                    ServerMsg::Detached { reason } => {
+                        if let Some(sink) = &sink {
+                            sink(UserEvent::DaemonLost(reason.clone()));
                         }
                         continue;
                     }
@@ -342,7 +352,9 @@ fn read_loop(
             Frame::Input(..) => {}
         }
     }
-    if let Some(proxy) = &proxy {
-        let _ = proxy.send_event(UserEvent::DaemonLost);
+    if let Some(sink) = &sink {
+        sink(UserEvent::DaemonLost(
+            "lost the session daemon; these shells are gone".into(),
+        ));
     }
 }

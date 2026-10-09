@@ -30,26 +30,37 @@ pub enum UserEvent {
     Term(PaneId, TermEvent),
     /// A request from the control socket (`control.rs`).
     Control(crate::control::Call),
-    /// The session daemon's connection closed.
-    DaemonLost,
+    /// The session daemon's connection closed, or the daemon detached this
+    /// client (the session was attached elsewhere); the reason.
+    DaemonLost(String),
+}
+
+/// Where terminal and daemon events go: the window's event loop, or a
+/// channel (the terminal attach client).
+pub type EventSink = Arc<dyn Fn(UserEvent) + Send + Sync>;
+
+pub fn sink_for(proxy: EventLoopProxy<UserEvent>) -> EventSink {
+    Arc::new(move |event| {
+        let _ = proxy.send_event(event);
+    })
 }
 
 /// alacritty_terminal's `EventListener`, tagged with the pane it belongs to.
 #[derive(Clone)]
 pub struct EventProxy {
     pane: PaneId,
-    proxy: EventLoopProxy<UserEvent>,
+    sink: EventSink,
 }
 
 impl EventProxy {
-    pub fn new(pane: PaneId, proxy: EventLoopProxy<UserEvent>) -> Self {
-        Self { pane, proxy }
+    pub fn new(pane: PaneId, sink: EventSink) -> Self {
+        Self { pane, sink }
     }
 }
 
 impl EventListener for EventProxy {
     fn send_event(&self, event: TermEvent) {
-        let _ = self.proxy.send_event(UserEvent::Term(self.pane, event));
+        (self.sink)(UserEvent::Term(self.pane, event));
     }
 }
 
@@ -124,7 +135,7 @@ impl Session {
         proxy: EventLoopProxy<UserEvent>,
         opts: SpawnOptions,
     ) -> std::io::Result<Self> {
-        let listener = EventProxy { pane, proxy };
+        let listener = EventProxy::new(pane, sink_for(proxy));
         let term = Arc::new(FairMutex::new(Term::new(
             opts.term_config,
             &opts.size,

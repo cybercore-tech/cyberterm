@@ -16,6 +16,7 @@ mod renderer;
 mod session;
 mod shell;
 mod theme;
+mod tty_client;
 mod ui;
 
 use std::path::PathBuf;

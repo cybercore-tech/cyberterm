@@ -69,8 +69,11 @@ tested automatically:
       links, prompt marks, modes, palette, the alternate screen;
       `src/mux/snapshot.rs`), the wire protocol (`src/mux/protocol.rs`), and
       an end-to-end test that runs a real daemon and `/bin/sh` on a
-      temporary socket, detaches, reattaches and checks the shell survived
-      (`src/mux/server.rs`)
+      temporary socket, detaches, reattaches, takes the session over with
+      `--force` and checks the shell survived (`src/mux/server.rs`); the
+      saved layout format (`src/mux/layout_doc.rs`); the terminal attach
+      client's key/mouse parsing, OSC 52 encoding and mode mirroring
+      (`src/tty_client.rs`)
 - [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 
