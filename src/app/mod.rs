@@ -147,6 +147,9 @@ struct MouseState {
 
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
+    /// Declared before `gpu` so it's dropped before the window: on
+    /// Wayland it shares the window's display connection.
+    clipboard: Option<ClipboardManager>,
     gpu: Option<Gpu>,
     panes: Vec<Pane>,
     tabs: Vec<Tab>,
@@ -179,7 +182,6 @@ pub struct App {
     mods: ModifiersState,
     window_focused: bool,
     mouse: MouseState,
-    clipboard: Option<ClipboardManager>,
     blink_visible: bool,
     blink_last: Instant,
     ime_preedit: Option<String>,
@@ -247,7 +249,7 @@ impl App {
             mods: ModifiersState::empty(),
             window_focused: true,
             mouse: MouseState::default(),
-            clipboard: ClipboardManager::try_new(),
+            clipboard: Some(ClipboardManager::new()),
             blink_visible: true,
             blink_last: Instant::now(),
             ime_preedit: None,
@@ -948,6 +950,9 @@ impl App {
                 .map_err(|e| format!("failed to create window: {e}"))?,
         );
         window.set_ime_allowed(true);
+        if let Some(clipboard) = &mut self.clipboard {
+            clipboard.attach(&window);
+        }
         window.set_cursor(CursorIcon::Text);
 
         let size = window.inner_size();

@@ -146,6 +146,7 @@ impl Server {
             .mode(0o700)
             .create(&dir)?;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        remove_stale_sockets(&dir);
         let path = dir.join(format!("{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path)?;
@@ -168,6 +169,27 @@ impl Server {
 impl Drop for Server {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Deletes sockets left by Cyberterms that were killed (no destructor ran):
+/// a socket named after a pid that no longer exists.
+fn remove_stale_sockets(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let pid = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(|s| s.parse::<u32>().ok());
+        let is_sock = path.extension().is_some_and(|x| x == "sock");
+        if let (true, Some(pid)) = (is_sock, pid) {
+            if !Path::new(&format!("/proc/{pid}")).exists() {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
     }
 }
 

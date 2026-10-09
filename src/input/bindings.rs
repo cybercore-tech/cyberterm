@@ -458,6 +458,11 @@ fn pretty(combo: &str) -> String {
         .collect::<Vec<_>>()
         .join("+")
         .replace("++", "+")
+        .replace("Comma", ",")
+        .replace("Period", ".")
+        .replace("Equal", "=")
+        .replace("Minus", "-")
+        .replace("Plus", "+")
 }
 
 type Entry = (Combo, Action, String);
@@ -732,6 +737,8 @@ mod tests {
         assert_eq!(b.hint(Action::Copy), "Ctrl+Shift+C");
         assert_eq!(b.hint(Action::PastePrimary), "");
         assert_eq!(pretty("ctrl++"), "Ctrl++");
+        assert_eq!(pretty("ctrl+shift+comma"), "Ctrl+Shift+,");
+        assert_eq!(pretty("ctrl+super+shift+equal"), "Ctrl+Super+Shift+=");
     }
 
     #[test]

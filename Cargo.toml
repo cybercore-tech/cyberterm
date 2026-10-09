@@ -28,3 +28,9 @@ toml = "0.8"
 toml_edit = "0.22"              # Comment-preserving edits when saving theme/opacity
 serde_json = "1.0.150"
 cybercore = "0.8"
+
+# Wayland clipboard + primary selection through the window's own
+# connection (what Alacritty uses). Setting the primary selection via the
+# data-control protocol, as arboard does, doesn't stick on Hyprland.
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+smithay-clipboard = "0.7"

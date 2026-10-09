@@ -1,7 +1,12 @@
 // src/clipboard.rs
 //
-// System clipboard and (on Linux) primary selection access. Native on
-// Wayland through the wlr data-control protocol, X11 otherwise.
+// System clipboard and primary selection.
+//
+// On Wayland the window's own connection is used (smithay-clipboard), so
+// Cyberterm offers selections as the focused client, which every
+// compositor honours. arboard is the fallback (X11, macOS, or before the
+// window exists): on Wayland it goes through the data-control protocol,
+// where Hyprland doesn't keep a primary selection set that way.
 
 use arboard::Clipboard;
 
@@ -9,13 +14,15 @@ use arboard::Clipboard;
 pub enum Kind {
     Clipboard,
     /// The X11/Wayland primary selection: whatever was last selected,
-    /// pasted with middle-click or Shift+Insert. Falls back to the
-    /// clipboard on platforms without one.
+    /// pasted with middle-click. Falls back to the clipboard on platforms
+    /// without one.
     Primary,
 }
 
 pub struct ClipboardManager {
-    ctx: Clipboard,
+    #[cfg(all(unix, not(target_os = "macos")))]
+    wayland: Option<smithay_clipboard::Clipboard>,
+    fallback: Option<Clipboard>,
 }
 
 /// Box-drawing characters copied out of TUIs are swapped for ASCII so a
@@ -34,14 +41,33 @@ fn clean_box_drawing(text: &str) -> String {
 }
 
 impl ClipboardManager {
-    /// `None` when no clipboard backend is available (e.g. a display
-    /// session without clipboard support) -- callers should treat that as
-    /// "clipboard operations are silently unavailable," not a fatal error,
-    /// since a terminal is otherwise fully usable without one.
-    pub fn try_new() -> Option<Self> {
-        Some(Self {
-            ctx: Clipboard::new().ok()?,
-        })
+    /// Always succeeds; operations are silently unavailable when no
+    /// backend works (a terminal is fully usable without a clipboard).
+    pub fn new() -> Self {
+        Self {
+            #[cfg(all(unix, not(target_os = "macos")))]
+            wayland: None,
+            fallback: Clipboard::new().ok(),
+        }
+    }
+
+    /// Switches to the window's Wayland connection when there is one.
+    pub fn attach(&mut self, window: &winit::window::Window) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
+            if let Ok(handle) = window.display_handle() {
+                if let RawDisplayHandle::Wayland(wayland) = handle.as_raw() {
+                    // SAFETY: the display pointer comes from the live
+                    // window, and `App` drops this clipboard before the
+                    // window and event loop (field order in `App`).
+                    self.wayland = Some(unsafe {
+                        smithay_clipboard::Clipboard::new(wayland.display.as_ptr())
+                    });
+                }
+            }
+        }
+        let _ = window;
     }
 
     pub fn set(&mut self, kind: Kind, text: &str, clean: bool) {
@@ -51,37 +77,59 @@ impl ClipboardManager {
             text.to_string()
         };
         #[cfg(all(unix, not(target_os = "macos")))]
-        if kind == Kind::Primary {
-            use arboard::{LinuxClipboardKind, SetExtLinux};
-            if let Err(e) = self
-                .ctx
-                .set()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text(text)
-            {
-                eprintln!("cyberterm: primary selection not set: {e}");
+        {
+            if let Some(wayland) = &self.wayland {
+                match kind {
+                    Kind::Clipboard => wayland.store(text),
+                    Kind::Primary => wayland.store_primary(text),
+                }
+                return;
             }
-            return;
+            if kind == Kind::Primary {
+                use arboard::{LinuxClipboardKind, SetExtLinux};
+                if let Some(fallback) = &mut self.fallback {
+                    if let Err(e) = fallback
+                        .set()
+                        .clipboard(LinuxClipboardKind::Primary)
+                        .text(text)
+                    {
+                        eprintln!("cyberterm: primary selection not set: {e}");
+                    }
+                }
+                return;
+            }
         }
         let _ = kind;
-        if let Err(e) = self.ctx.set_text(text) {
-            eprintln!("cyberterm: clipboard not set: {e}");
+        if let Some(fallback) = &mut self.fallback {
+            if let Err(e) = fallback.set_text(text) {
+                eprintln!("cyberterm: clipboard not set: {e}");
+            }
         }
     }
 
     pub fn get(&mut self, kind: Kind) -> Option<String> {
         #[cfg(all(unix, not(target_os = "macos")))]
-        if kind == Kind::Primary {
-            use arboard::{GetExtLinux, LinuxClipboardKind};
-            return self
-                .ctx
-                .get()
-                .clipboard(LinuxClipboardKind::Primary)
-                .text()
+        {
+            if let Some(wayland) = &self.wayland {
+                return match kind {
+                    Kind::Clipboard => wayland.load(),
+                    Kind::Primary => wayland.load_primary(),
+                }
                 .ok();
+            }
+            if kind == Kind::Primary {
+                use arboard::{GetExtLinux, LinuxClipboardKind};
+                return self
+                    .fallback
+                    .as_mut()?
+                    .get()
+                    .clipboard(LinuxClipboardKind::Primary)
+                    .text()
+                    .ok();
+            }
         }
         let _ = kind;
-        self.ctx.get_text().ok()
+        self.fallback.as_mut()?.get_text().ok()
     }
 }
 
