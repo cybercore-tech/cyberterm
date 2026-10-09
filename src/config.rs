@@ -29,6 +29,7 @@ pub struct CyberConfig {
     pub keyboard: KeyboardConfig,
     pub tabs: TabsConfig,
     pub splits: SplitsConfig,
+    pub control: ControlConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
     /// built-in bindings (`input::bindings`). Map a combo to `"none"` to
     /// unbind a default and let the keystroke reach the shell instead.
@@ -51,6 +52,7 @@ impl Default for CyberConfig {
             keyboard: KeyboardConfig::default(),
             tabs: TabsConfig::default(),
             splits: SplitsConfig::default(),
+            control: ControlConfig::default(),
             keybindings: BTreeMap::new(),
         }
     }
@@ -334,6 +336,20 @@ impl Default for TabsConfig {
 pub struct SplitsConfig {
     /// How much to dim panes that don't have focus, 0.0 (off) - 1.0.
     pub inactive_dim: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct ControlConfig {
+    /// Listen on a user-only Unix socket so `cyberterm +ctl` and scripts
+    /// can list, read, type into and arrange panes. Read at startup.
+    pub enabled: bool,
+}
+
+impl Default for ControlConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 impl Default for SplitsConfig {

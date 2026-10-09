@@ -82,6 +82,11 @@ bar = "auto"
 # Dim panes that don't have focus: 0.0 (off) to 1.0.
 inactive_dim = 0.25
 
+[control]
+# A user-only Unix socket for `cyberterm +ctl` and scripts (list, read,
+# type into and arrange panes). Read at startup.
+enabled = true
+
 [keybindings]
 # Overrides on top of the built-in bindings (`cyberterm +list-termkeys`).
 # Use "none" to free a combo for the shell, e.g.:

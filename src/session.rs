@@ -28,6 +28,8 @@ pub type PaneId = u32;
 #[derive(Debug)]
 pub enum UserEvent {
     Term(PaneId, TermEvent),
+    /// A request from the control socket (`control.rs`).
+    Control(crate::control::Call),
 }
 
 /// alacritty_terminal's `EventListener`, tagged with the pane it belongs to.
@@ -72,6 +74,8 @@ pub struct SpawnOptions {
     pub args: Vec<String>,
     pub cwd: Option<PathBuf>,
     pub term_config: TermConfig,
+    /// The control socket, exported to the shell as `CYBERTERM_SOCKET`.
+    pub control_socket: Option<PathBuf>,
 }
 
 pub struct Session {
@@ -117,6 +121,12 @@ impl Session {
             env!("CARGO_PKG_VERSION").to_string(),
         );
         env.insert("CYBERTERM_PANE".to_string(), pane.to_string());
+        if let Some(socket) = &opts.control_socket {
+            env.insert(
+                "CYBERTERM_SOCKET".to_string(),
+                socket.to_string_lossy().into_owned(),
+            );
+        }
         if let Some(term) = opts.term.filter(|t| !t.trim().is_empty()) {
             env.insert("TERM".to_string(), term);
         }

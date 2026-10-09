@@ -6,9 +6,11 @@ mod boxdraw;
 mod cli;
 mod clipboard;
 mod config;
+mod control;
 mod frame;
 mod input;
 mod layout;
+mod layout_file;
 mod renderer;
 mod session;
 mod shell;
@@ -42,12 +44,11 @@ fn main() {
     };
 
     let sys_args: Vec<String> = std::env::args().collect();
-    if matches!(
-        cli::handle_arguments(sys_args, &config_root, cyber_config.clone()),
-        cli::CliAction::ExitCleanly
-    ) {
-        return;
-    }
+    let startup_layout = match cli::handle_arguments(sys_args, &config_root, cyber_config.clone()) {
+        cli::CliAction::ExitCleanly => return,
+        cli::CliAction::RunTerminal => None,
+        cli::CliAction::RunLayout(path) => Some(std::fs::canonicalize(&path).unwrap_or(path)),
+    };
 
     // TERM=alacritty when its terminfo is installed (our parser *is*
     // alacritty's, so that entry describes exactly what we support),
@@ -87,12 +88,15 @@ fn main() {
     };
     let mut app = app::App::new(
         event_loop.create_proxy(),
-        config_root,
-        themes_dir,
-        cyber_config,
-        registry,
-        initial_theme,
-        shared_revision,
+        app::Startup {
+            config_root,
+            themes_dir,
+            config: cyber_config,
+            registry,
+            initial_theme,
+            shared_theme_revision: shared_revision,
+            layout: startup_layout,
+        },
     );
     let _ = event_loop.run_app(&mut app);
 }

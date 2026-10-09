@@ -7,6 +7,9 @@ use std::path::Path; // Import your updated config layout
 
 pub enum CliAction {
     RunTerminal,
+    /// Run, opening this layout file (or project directory) instead of a
+    /// single shell.
+    RunLayout(std::path::PathBuf),
     ExitCleanly,
 }
 
@@ -243,6 +246,25 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
+        "+layout" => {
+            let path = args
+                .get(2)
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| std::path::PathBuf::from(crate::layout_file::DEFAULT_PATH));
+            match crate::layout_file::load(&path) {
+                Ok(_) => CliAction::RunLayout(path),
+                Err(e) => {
+                    eprintln!("❌ {e}");
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        "+ctl" => {
+            run_ctl(&args[2..]);
+            CliAction::ExitCleanly
+        }
+
         "+default-config" => {
             print!("{}", crate::config::default_config_toml());
             CliAction::ExitCleanly
@@ -286,6 +308,10 @@ pub fn handle_arguments(
             println!(
                 "  cyberterm +shell-integration [sh]  print the zsh/bash/fish integration script"
             );
+            println!(
+                "  cyberterm +ctl <method> [k=v ...]  control a running Cyberterm (see +ctl help)"
+            );
+            println!("  cyberterm +layout [file|dir]       open a layout (default .cyberterm/layout.toml)");
             CliAction::ExitCleanly
         }
 
@@ -324,5 +350,85 @@ pub fn handle_arguments(
         }
 
         _ => CliAction::RunTerminal,
+    }
+}
+
+const CTL_HELP: &str = "\
+cyberterm +ctl <method> [key=value ...] [--socket PATH]
+
+Talks to a running Cyberterm over its control socket: the one this shell
+runs in ($CYBERTERM_SOCKET), else the newest one that answers. Values that
+parse as JSON are used as JSON (pane=3, paste=true); the rest are strings.
+
+  ping                                    version and pid
+  list-tabs                               tabs, their panes and focus
+  list-panes                              panes: title, cwd, size, last exit code
+  get-text    [pane=N] [lines=N]          screen text, or the last N lines
+  send-text   [pane=N] text=... [paste=true]
+  split       [pane=N] [direction=right|down|left|up] [cwd=DIR] [command=CMD]
+  new-tab     [cwd=DIR] [command=CMD] [title=NAME]
+  focus       pane=N
+  close       [pane=N]
+  zoom        [pane=N] [on=true|false]
+  set-title   [tab=N] title=NAME
+  resize      [pane=N] direction=... [amount=N]
+  load-layout [path=FILE|DIR]             open a layout's tabs in this window
+
+Without pane=N, methods act on the focused pane.";
+
+fn run_ctl(args: &[String]) {
+    let mut socket = None;
+    let mut rest = Vec::new();
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--socket" {
+            socket = iter.next().map(std::path::PathBuf::from);
+        } else if let Some(path) = arg.strip_prefix("--socket=") {
+            socket = Some(std::path::PathBuf::from(path));
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    let Some(method) = rest
+        .first()
+        .filter(|m| !matches!(m.as_str(), "help" | "--help" | "-h"))
+        .map(|m| m.replace('-', "_"))
+    else {
+        println!("{CTL_HELP}");
+        return;
+    };
+    let params = match crate::control::params_from_args(&rest[1..]) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("❌ {e}");
+            std::process::exit(2);
+        }
+    };
+    let Some(socket) = socket.or_else(crate::control::find_socket) else {
+        eprintln!("❌ No running Cyberterm found (is [control] enabled?).");
+        std::process::exit(1);
+    };
+    match crate::control::call(&socket, &method, params) {
+        Ok(response) => match (response.result, response.error) {
+            (_, Some(error)) => {
+                eprintln!("❌ {} ({})", error.message, error.code);
+                std::process::exit(1);
+            }
+            // Text comes out as text, so it pipes into other tools.
+            (Some(result), None) if method == "get_text" => {
+                println!("{}", result["text"].as_str().unwrap_or_default());
+            }
+            (Some(result), None) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
+            }
+            (None, None) => {}
+        },
+        Err(e) => {
+            eprintln!("❌ {}: {e}", socket.display());
+            std::process::exit(1);
+        }
     }
 }

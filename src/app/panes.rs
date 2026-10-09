@@ -68,6 +68,7 @@ impl App {
                 args: self.config.shell.args.clone(),
                 cwd,
                 term_config: self.term_config(),
+                control_socket: self.control.as_ref().map(|c| c.path().to_path_buf()),
             },
         )?;
         session.term.lock().is_focused = self.window_focused;
@@ -78,6 +79,7 @@ impl App {
             bell: None,
             bell_unseen: false,
             title: String::new(),
+            pending_command: None,
         });
         Ok(id)
     }
@@ -433,5 +435,80 @@ impl App {
             tab.root.set_ratio_at(&divider.path, ratio);
         }
         self.relayout();
+    }
+
+    /// Types a pane's queued command once its shell has drawn a prompt.
+    pub(super) fn flush_pending_command(&mut self, index: usize) {
+        let pane = &mut self.panes[index];
+        let Some((_, queued)) = &pane.pending_command else {
+            return;
+        };
+        let ready = pane.session.shell.lock().prompts > 0;
+        if ready || queued.elapsed() >= COMMAND_READY_TIMEOUT {
+            if let Some((command, _)) = pane.pending_command.take() {
+                pane.session.write(format!("{command}\r").into_bytes());
+            }
+        }
+    }
+
+    /// Opens the tabs a layout file describes, after the existing ones,
+    /// and switches to the first of them.
+    pub(super) fn open_layout(
+        &mut self,
+        plans: Vec<crate::layout_file::TabPlan>,
+    ) -> std::io::Result<()> {
+        let first_new = self.tabs.len();
+        for plan in plans {
+            let mut focus = None;
+            let root = self.spawn_plan(&plan.root, &mut focus)?;
+            let first = root.panes()[0];
+            let mut tab = Tab::new(self.next_tab, first);
+            self.next_tab += 1;
+            tab.root = root;
+            tab.focused = focus.unwrap_or(first);
+            tab.title = plan.title;
+            self.tabs.push(tab);
+        }
+        self.activate_tab(first_new);
+        self.relayout();
+        Ok(())
+    }
+
+    fn spawn_plan(
+        &mut self,
+        plan: &crate::layout_file::Plan,
+        focus: &mut Option<PaneId>,
+    ) -> std::io::Result<crate::layout::Node> {
+        use crate::layout::Node;
+        use crate::layout_file::Plan;
+        Ok(match plan {
+            Plan::Pane {
+                cwd,
+                command,
+                focus: wants_focus,
+            } => {
+                let cwd = if cwd.is_dir() {
+                    Some(cwd.clone())
+                } else {
+                    eprintln!(
+                        "cyberterm: layout directory {} doesn't exist",
+                        cwd.display()
+                    );
+                    None
+                };
+                let id = self.new_session(cwd)?;
+                self.run_in(id, command.as_deref());
+                if *wants_focus {
+                    *focus = Some(id);
+                }
+                Node::Leaf(id)
+            }
+            Plan::Split { axis, ratio, a, b } => Node::Split {
+                axis: *axis,
+                ratio: *ratio,
+                a: Box::new(self.spawn_plan(a, focus)?),
+                b: Box::new(self.spawn_plan(b, focus)?),
+            },
+        })
     }
 }

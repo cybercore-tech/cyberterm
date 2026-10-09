@@ -42,12 +42,16 @@ use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
 use crate::ui::context_menu;
 
+mod control;
 mod input;
 mod panes;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const BELL_FLASH: Duration = Duration::from_millis(150);
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a queued command waits for the shell's first prompt before
+/// being typed anyway (shells without shell integration never report one).
+const COMMAND_READY_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub struct ThemeMenuState {
     pub is_open: bool,
@@ -83,6 +87,9 @@ struct Pane {
     bell_unseen: bool,
     /// Title set by the program (OSC 0/2).
     title: String,
+    /// A command to type once the shell is ready (layouts, `+ctl`), and
+    /// when it was queued.
+    pending_command: Option<(String, Instant)>,
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -154,6 +161,10 @@ pub struct App {
     divider_drag: Option<Divider>,
     /// Set when the last tab closes; the event loop exits on its next turn.
     exit_requested: bool,
+    /// The control socket (`cyberterm +ctl`, scripts, agents).
+    control: Option<crate::control::Server>,
+    /// A layout file to open instead of a single shell (`+layout`).
+    startup_layout: Option<PathBuf>,
 
     config: CyberConfig,
     config_root: PathBuf,
@@ -180,16 +191,29 @@ pub struct App {
     shared_theme_revision: u64,
 }
 
+/// Everything `main` prepares before the window exists.
+pub struct Startup {
+    pub config_root: PathBuf,
+    pub themes_dir: PathBuf,
+    pub config: CyberConfig,
+    pub registry: ThemeRegistry,
+    pub initial_theme: Option<Theme>,
+    pub shared_theme_revision: u64,
+    /// A layout file to open instead of a single shell (`+layout`).
+    pub layout: Option<PathBuf>,
+}
+
 impl App {
-    pub fn new(
-        proxy: EventLoopProxy<UserEvent>,
-        config_root: PathBuf,
-        themes_dir: PathBuf,
-        config: CyberConfig,
-        registry: ThemeRegistry,
-        initial_theme: Option<Theme>,
-        shared_theme_revision: u64,
-    ) -> Self {
+    pub fn new(proxy: EventLoopProxy<UserEvent>, startup: Startup) -> Self {
+        let Startup {
+            config_root,
+            themes_dir,
+            config,
+            registry,
+            initial_theme,
+            shared_theme_revision,
+            layout: startup_layout,
+        } = startup;
         let (bindings, errors) =
             Bindings::new(&config.keybindings, config.keyboard.leader.as_deref());
         report_config_errors(&errors);
@@ -205,6 +229,8 @@ impl App {
             leader_pending: false,
             divider_drag: None,
             exit_requested: false,
+            control: None,
+            startup_layout,
             font_size: config.font.size,
             config_mtime: config::config_mtime(&config_root),
             config,
@@ -232,6 +258,12 @@ impl App {
         };
         if let Some(theme) = initial_theme {
             app.apply_theme(&theme);
+        }
+        if app.config.control.enabled {
+            match crate::control::Server::start(app.proxy.clone()) {
+                Ok(server) => app.control = Some(server),
+                Err(e) => eprintln!("cyberterm: control socket unavailable: {e}"),
+            }
         }
         app
     }
@@ -455,7 +487,10 @@ impl App {
             return;
         };
         match event {
-            TermEvent::Wakeup => self.request_redraw(),
+            TermEvent::Wakeup => {
+                self.flush_pending_command(index);
+                self.request_redraw();
+            }
             TermEvent::Title(title) => {
                 self.panes[index].title = title;
                 if id == self.focused {
@@ -1000,6 +1035,24 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
+        if let Some(path) = self.startup_layout.take() {
+            match crate::layout_file::load(&path) {
+                Ok(plans) => match self.open_layout(plans) {
+                    Ok(()) => return,
+                    Err(e) => eprintln!("cyberterm: layout failed: {e}"),
+                },
+                Err(e) => {
+                    // Say so where the user will see it: in the shell.
+                    eprintln!("cyberterm: layout not loaded: {e}");
+                    if let Ok(id) = self.open_tab(None) {
+                        let message =
+                            format!("cyberterm: layout not loaded: {e}").replace('\'', "'\\''");
+                        self.run_in(id, Some(&format!("printf '%s\\n' '{message}'")));
+                    }
+                    return;
+                }
+            }
+        }
         if let Err(e) = self.open_tab(None) {
             eprintln!("CRITICAL: Failed to spawn shell: {e}");
             event_loop.exit();
@@ -1009,6 +1062,14 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Term(id, event) => self.on_term_event(event_loop, id, event),
+            UserEvent::Control(call) => {
+                let id = call.request.id.clone();
+                let outcome = self.on_control(call.request);
+                let _ = call.reply.send(crate::control::Response::new(id, outcome));
+                if self.exit_requested {
+                    event_loop.exit();
+                }
+            }
         }
     }
 
@@ -1095,6 +1156,19 @@ impl ApplicationHandler<UserEvent> for App {
             self.reload_config(false);
         }
         let mut next = self.last_poll + POLL_INTERVAL;
+
+        for index in 0..self.panes.len() {
+            self.flush_pending_command(index);
+        }
+        if let Some(queued) = self
+            .panes
+            .iter()
+            .filter_map(|p| p.pending_command.as_ref())
+            .map(|(_, at)| *at)
+            .min()
+        {
+            next = next.min(queued + COMMAND_READY_TIMEOUT);
+        }
 
         // Cursor blink: only while focused, and only when the effective
         // cursor style (config or a program's DECSCUSR) asks for it.
