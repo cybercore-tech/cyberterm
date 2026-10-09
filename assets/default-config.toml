@@ -92,6 +92,14 @@ enabled = true
 # plus its exit code and duration. Needs shell integration.
 decorations = true
 
+[links]
+# Ctrl+click on `path:line` references in output (compiler errors, stack
+# traces, grep -n) opens them. By default the editor comes from $VISUAL /
+# $EDITOR: terminal editors open in a new pane, GUI ones (code, zed, subl)
+# in their own window. Override with a template:
+# editor = "nvim +{line} {file}"
+# editor_in_pane = true
+
 [history]
 # Save every finished command with its output (secrets redacted) to a
 # searchable database: `cyberterm +history <words>`. Needs shell

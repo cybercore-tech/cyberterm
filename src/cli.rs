@@ -303,6 +303,14 @@ pub fn handle_arguments(
             }
         }
 
+        "+json" => {
+            if let Err(e) = crate::json_viewer::run(args.get(2).map(String::as_str)) {
+                eprintln!("❌ {e}");
+                std::process::exit(1);
+            }
+            CliAction::ExitCleanly
+        }
+
         "+history" => {
             run_history(&args[2..]);
             CliAction::ExitCleanly

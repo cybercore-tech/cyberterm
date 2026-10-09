@@ -57,6 +57,8 @@ pub enum Action {
     NewWindow,
     CopyLastOutput,
     ShowLastOutput,
+    FindInScrollback,
+    HistorySearch,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -246,6 +248,16 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "show_last_output",
         "Open the last command's output in a pager",
     ),
+    (
+        Action::FindInScrollback,
+        "find",
+        "Search the scrollback (Enter older, Shift+Enter newer)",
+    ),
+    (
+        Action::HistorySearch,
+        "history_search",
+        "Search saved commands and their output",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -312,6 +324,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+n", "new_window"),
     ("ctrl+shift+g", "show_last_output"),
     ("ctrl+shift+y", "copy_last_output"),
+    ("ctrl+shift+f", "find"),
+    ("ctrl+shift+h", "history_search"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

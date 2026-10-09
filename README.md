@@ -48,6 +48,7 @@ cyberterm +ctl <method> [k=v ...]  # control a running Cyberterm (cyberterm +ctl
 cyberterm +attach [name] [--force] [--tty]  # reattach a daemon session (window, or in this terminal)
 cyberterm +sessions                # list daemon sessions
 cyberterm +history [words]         # search saved commands and their output
+cyberterm +json [file]             # browse JSON as a collapsible tree (or pipe it in)
 cyberterm +kill-session <name>     # end a daemon session and its shells
 ```
 
@@ -64,6 +65,8 @@ cyberterm +kill-session <name>     # end a daemon session and its shells
 | `Shift+Home` / `Shift+End` | Top of the scrollback / back to the live screen |
 | `Ctrl+Shift+Z` / `Ctrl+Shift+X` | Jump to the previous / next shell prompt |
 | `Ctrl+Shift+K` | Clear the scrollback |
+| `Ctrl+Shift+F` | Find in the scrollback (Enter older, Shift+Enter newer) |
+| `Ctrl+Shift+H` | Search command history (commands and their output) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Bigger / smaller / reset font |
 | `Ctrl+Shift+,` | Theme picker |
 | `Ctrl+Shift+R` | Reload the config now |
@@ -221,7 +224,23 @@ cyberterm +history --failed --here      # failures in this directory
 cyberterm +history --output 42          # everything command 42 printed
 ```
 
-The same search is on the control socket (`cyberterm +ctl history query=...`).
+The same search is on the control socket (`cyberterm +ctl history query=...`),
+and in the window with **Ctrl+Shift+H**:
+
+- **Search:** type to search commands and their output.
+- **Preview:** the selected command's saved output is shown below the list.
+- **Keys:** Enter puts the command at your prompt, Ctrl+Enter runs it, Tab opens its full output in a pane.
+
+### Smart output
+
+- **File references:** `src/main.rs:42:7`, Rust's `--> src/x.rs:12:5`, compiler and linter errors, `grep -n` output, Node and Go stack traces, Python's `File "x.py", line 12` and `file.cs(12,5)`.
+  - They underline on hover; Ctrl+click (or right-click → Open) opens them in your editor at that line.
+  - Paths resolve against the directory the command ran in, and only existing files are linked.
+  - The editor comes from `$VISUAL`/`$EDITOR`. Terminal editors (nvim, vim, helix, nano, micro, kakoune) open in a new pane, GUI editors (VS Code, Zed, Sublime) in their own window. `[links] editor` takes a template such as `"nvim +{line} {file}"`.
+- **JSON:** a block whose output is JSON gets **View as JSON** in its menu, which opens `cyberterm +json`: a collapsible tree.
+  - Arrows/`hjkl` move, Enter folds, `e`/`c` expand or collapse everything.
+  - `/` searches, `y` copies the node's path (`.items[3].name`) and `Y` its value.
+  - It works on its own too: `curl -s api/health | cyberterm +json`, including JSON Lines.
 
 ## 🐚 Shell integration
 

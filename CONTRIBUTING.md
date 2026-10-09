@@ -79,6 +79,11 @@ tested automatically:
       commands and scrollback (`src/blocks.rs`); history storage, FTS
       search, previous-run lookup, secret redaction, output capping and
       record-once collection (`src/history.rs`)
+- [x] Smart output: file-reference detection (compiler, linter, stack
+      trace, Python, MSVC formats; URLs and times excluded;
+      `src/input/links.rs`), editor command templates and quoting
+      (`src/app/blocks.rs`), scrollback search (`src/find.rs`), the JSON
+      tree model: folding, paths, search, JSON Lines (`src/json_viewer.rs`)
 - [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 
