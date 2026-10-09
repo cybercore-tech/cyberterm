@@ -65,6 +65,12 @@ tested automatically:
       focus, dividers, zoom (`src/layout.rs`); layout files
       (`src/layout_file.rs`); tab bar (`src/ui/tab_bar.rs`); context menu
       (`src/ui/context_menu.rs`); control-socket protocol (`src/control.rs`)
+- [x] Session daemon: snapshot/replay round trips (scrollback, attributes,
+      links, prompt marks, modes, palette, the alternate screen;
+      `src/mux/snapshot.rs`), the wire protocol (`src/mux/protocol.rs`), and
+      an end-to-end test that runs a real daemon and `/bin/sh` on a
+      temporary socket, detaches, reattaches and checks the shell survived
+      (`src/mux/server.rs`)
 - [ ] Actually rendering a frame, spawning a shell, or receiving keystrokes:
       these need a human to launch the binary and look at the window
 

@@ -54,23 +54,30 @@ impl App {
         let (_, area) = self.areas(gpu);
         let (cols, rows) = gpu.renderer.grid_size(area.w, area.h);
         let (cw, ch) = gpu.renderer.cell_size();
-        let id = self.next_pane;
-        self.next_pane += 1;
-        let session = Session::spawn(
-            id,
-            self.proxy.clone(),
-            SpawnOptions {
-                size: GridSize { cols, rows },
-                cell_width: cw,
-                cell_height: ch,
-                program: self.config.shell.program.clone(),
-                term: self.config.shell.term.clone(),
-                args: self.config.shell.args.clone(),
-                cwd,
-                term_config: self.term_config(),
-                control_socket: self.control.as_ref().map(|c| c.path().to_path_buf()),
-            },
-        )?;
+        let size = GridSize { cols, rows };
+        let (id, session) = match self.daemon.clone() {
+            Some(client) => self.spawn_remote(client, cwd, size, (cw, ch))?,
+            None => {
+                let id = self.next_pane;
+                self.next_pane += 1;
+                let session = Session::spawn(
+                    id,
+                    self.proxy.clone(),
+                    SpawnOptions {
+                        size,
+                        cell_width: cw,
+                        cell_height: ch,
+                        program: self.config.shell.program.clone(),
+                        term: self.config.shell.term.clone(),
+                        args: self.config.shell.args.clone(),
+                        cwd,
+                        term_config: self.term_config(),
+                        control_socket: self.shell_socket(),
+                    },
+                )?;
+                (id, session)
+            }
+        };
         session.term.lock().is_focused = self.window_focused;
         self.panes.push(Pane {
             id,
@@ -134,8 +141,11 @@ impl App {
 
     /// Closes a pane and its shell.
     pub(super) fn close_pane(&mut self, id: PaneId) {
-        // Dropping the session hangs up the shell; its exit event then
-        // finds no pane and is ignored.
+        // Ending the session hangs up the shell; its exit event then finds
+        // no pane and is ignored.
+        if let Some(pane) = self.pane(id) {
+            pane.session.kill();
+        }
         self.remove_pane(id);
     }
 
@@ -204,6 +214,9 @@ impl App {
     pub(super) fn close_tab(&mut self) {
         let Some(tab) = self.active() else { return };
         for id in tab.root.panes() {
+            if let Some(pane) = self.pane(id) {
+                pane.session.kill();
+            }
             self.panes.retain(|p| p.id != id);
         }
         self.tabs.remove(self.active_tab);
@@ -327,6 +340,7 @@ impl App {
         }
         self.tabs.swap(self.active_tab, to as usize);
         self.active_tab = to as usize;
+        self.layout_dirty = true;
         self.request_redraw();
     }
 

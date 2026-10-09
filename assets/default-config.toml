@@ -87,6 +87,14 @@ inactive_dim = 0.25
 # type into and arrange panes). Read at startup.
 enabled = true
 
+[daemon]
+# Keep shells in a background session daemon: closing (or crashing) the
+# window only detaches, and `cyberterm` / `cyberterm +attach` brings your
+# tabs, splits and running programs back. Read at startup.
+enabled = false
+# Opening a window reattaches the most recent detached session.
+reattach = true
+
 [keybindings]
 # Overrides on top of the built-in bindings (`cyberterm +list-termkeys`).
 # Use "none" to free a combo for the shell, e.g.:

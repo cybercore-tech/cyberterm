@@ -126,6 +126,17 @@ fn current_uid() -> u32 {
         .unwrap_or(0)
 }
 
+/// Creates the socket directory, private to the user (0700).
+pub fn prepare_socket_dir() -> io::Result<PathBuf> {
+    let dir = socket_dir();
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(&dir)?;
+    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    Ok(dir)
+}
+
 /// The listening socket; removes its file when dropped.
 pub struct Server {
     path: PathBuf,
@@ -140,12 +151,7 @@ impl Server {
     /// thread. Calls are delivered to the event loop as
     /// `UserEvent::Control`.
     pub fn start(proxy: EventLoopProxy<UserEvent>) -> io::Result<Self> {
-        let dir = socket_dir();
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&dir)?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        let dir = prepare_socket_dir()?;
         remove_stale_sockets(&dir);
         let path = dir.join(format!("{}.sock", std::process::id()));
         let _ = std::fs::remove_file(&path);
@@ -180,6 +186,12 @@ fn remove_stale_sockets(dir: &Path) {
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        // Session links whose window is gone point at nothing.
+        let is_link = std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink());
+        if is_link && !path.exists() {
+            let _ = std::fs::remove_file(&path);
+            continue;
+        }
         let pid = path
             .file_stem()
             .and_then(|s| s.to_str())

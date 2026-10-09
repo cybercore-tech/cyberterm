@@ -43,6 +43,8 @@ use crate::ui;
 use crate::ui::context_menu;
 
 mod control;
+mod daemon;
+pub use daemon::AttachTarget;
 mod input;
 mod panes;
 
@@ -168,6 +170,15 @@ pub struct App {
     control: Option<crate::control::Server>,
     /// A layout file to open instead of a single shell (`+layout`).
     startup_layout: Option<PathBuf>,
+    /// `+attach`: which daemon session to attach to.
+    startup_attach: Option<daemon::AttachTarget>,
+    /// The session daemon connection, when `[daemon] enabled`.
+    daemon: Option<std::sync::Arc<crate::mux::client::DaemonClient>>,
+    session_name: Option<String>,
+    /// `session-<name>.sock`, pointing at this window's control socket.
+    session_link: Option<PathBuf>,
+    /// Tabs/splits changed since they were last saved with the session.
+    layout_dirty: bool,
 
     config: CyberConfig,
     config_root: PathBuf,
@@ -203,6 +214,8 @@ pub struct Startup {
     pub shared_theme_revision: u64,
     /// A layout file to open instead of a single shell (`+layout`).
     pub layout: Option<PathBuf>,
+    /// `+attach [name]`.
+    pub attach: Option<daemon::AttachTarget>,
 }
 
 impl App {
@@ -215,6 +228,7 @@ impl App {
             initial_theme,
             shared_theme_revision,
             layout: startup_layout,
+            attach: startup_attach,
         } = startup;
         let (bindings, errors) =
             Bindings::new(&config.keybindings, config.keyboard.leader.as_deref());
@@ -233,6 +247,11 @@ impl App {
             exit_requested: false,
             control: None,
             startup_layout,
+            startup_attach,
+            daemon: None,
+            session_name: None,
+            session_link: None,
+            layout_dirty: false,
             font_size: config.font.size,
             config_mtime: config::config_mtime(&config_root),
             config,
@@ -281,6 +300,7 @@ impl App {
                 hex_str_to_u32(&theme.cursor)
             },
         };
+        self.push_palette();
         self.request_redraw();
     }
 
@@ -397,6 +417,7 @@ impl App {
                 pane.session.resize(size, cw, ch);
             }
         }
+        self.layout_dirty = true;
         self.request_redraw();
     }
 
@@ -488,6 +509,19 @@ impl App {
         let Some(index) = self.panes.iter().position(|p| p.id == id) else {
             return;
         };
+        // A daemon pane's replica parses the same stream as the daemon's own
+        // terminal, which already answered these queries.
+        if self.panes[index].session.is_remote()
+            && matches!(
+                event,
+                TermEvent::PtyWrite(_)
+                    | TermEvent::ColorRequest(..)
+                    | TermEvent::TextAreaSizeRequest(_)
+                    | TermEvent::ClipboardLoad(..)
+            )
+        {
+            return;
+        }
         match event {
             TermEvent::Wakeup => {
                 self.flush_pending_command(index);
@@ -1030,6 +1064,12 @@ impl App {
     }
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        self.unlink_session_socket();
+    }
+}
+
 impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gpu.is_some() {
@@ -1039,6 +1079,15 @@ impl ApplicationHandler<UserEvent> for App {
             eprintln!("CRITICAL: {e}");
             event_loop.exit();
             return;
+        }
+        if self.config.daemon.enabled {
+            match self.start_daemon_session() {
+                Ok(true) => return,
+                Ok(false) => {}
+                Err(e) => {
+                    eprintln!("cyberterm: session daemon unavailable, shells will live in this window: {e}");
+                }
+            }
         }
         if let Some(path) = self.startup_layout.take() {
             match crate::layout_file::load(&path) {
@@ -1067,6 +1116,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Term(id, event) => self.on_term_event(event_loop, id, event),
+            UserEvent::DaemonLost => self.daemon_lost(),
             UserEvent::Control(call) => {
                 let id = call.request.id.clone();
                 let outcome = self.on_control(call.request);
@@ -1080,7 +1130,10 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.detach();
+                event_loop.exit();
+            }
             WindowEvent::ModifiersChanged(mods) => {
                 self.mods = mods.state();
             }
@@ -1153,6 +1206,9 @@ impl ApplicationHandler<UserEvent> for App {
         if self.exit_requested {
             event_loop.exit();
             return;
+        }
+        if self.layout_dirty {
+            self.save_layout();
         }
         let now = Instant::now();
         if now.duration_since(self.last_poll) >= POLL_INTERVAL {

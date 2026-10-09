@@ -6,10 +6,13 @@
 // no GPU -- so splitting, closing, resizing, directional focus and divider
 // hit-testing are all unit-tested.
 
+use serde::{Deserialize, Serialize};
+
 use crate::renderer::Rect;
 use crate::session::PaneId;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     /// Children side by side (a vertical divider between them).
     Horizontal,
@@ -36,7 +39,8 @@ impl Direction {
 
 const MIN_RATIO: f32 = 0.05;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Node {
     Leaf(PaneId),
     Split {
