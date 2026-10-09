@@ -228,10 +228,12 @@ pub fn handle_arguments(
         "+list-termkeys" => {
             println!("🎹 KEYBINDINGS");
             println!("──────────────────────────────────────────────");
-            for (combo, description) in
-                crate::input::bindings::describe(&current_config.keybindings)
-            {
-                println!("  {combo:<18} {description}");
+            let (bindings, _) = crate::input::bindings::Bindings::new(
+                &current_config.keybindings,
+                current_config.keyboard.leader.as_deref(),
+            );
+            for (combo, description) in bindings.describe() {
+                println!("  {combo:<28} {description}");
             }
             println!();
             println!(

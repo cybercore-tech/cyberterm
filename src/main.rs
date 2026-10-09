@@ -8,6 +8,7 @@ mod clipboard;
 mod config;
 mod frame;
 mod input;
+mod layout;
 mod renderer;
 mod session;
 mod shell;

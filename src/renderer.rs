@@ -55,6 +55,17 @@ pub struct PaneView<'a> {
     pub frame: &'a Frame,
     /// 0..1 strength of the visual-bell flash.
     pub flash: f32,
+    /// 0..1 how much to fade the pane toward its background (unfocused
+    /// splits).
+    pub dim: f32,
+}
+
+/// A plain rectangle drawn over everything (split dividers, ...).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Overlay {
+    pub rect: Rect,
+    pub color: [u8; 3],
+    pub alpha: f32,
 }
 
 /// The output surface + clear color for one `TermRenderer::render` call.
@@ -312,6 +323,7 @@ impl TermRenderer {
         encoder: &mut wgpu::CommandEncoder,
         target: FrameTarget<'_>,
         panes: &[PaneView<'_>],
+        overlays: &[Overlay],
     ) {
         let FrameTarget {
             view,
@@ -394,10 +406,24 @@ impl TermRenderer {
                 self.cursor(&mut overlay, cursor, ox, oy);
             }
             self.scrollbar(&mut overlay, pane);
+            if pane.dim > 0.0 {
+                overlay.push_overlay(
+                    ox,
+                    oy,
+                    pane.rect.w,
+                    pane.rect.h,
+                    frame.bg,
+                    pane.dim.min(1.0),
+                );
+            }
             if pane.flash > 0.0 {
                 let fg = frame.row(0).first().map(|c| c.fg).unwrap_or([0xff; 3]);
                 overlay.push_overlay(ox, oy, pane.rect.w, pane.rect.h, fg, 0.2 * pane.flash);
             }
+        }
+
+        for o in overlays {
+            overlay.push_overlay(o.rect.x, o.rect.y, o.rect.w, o.rect.h, o.color, o.alpha);
         }
 
         let mut text_areas = Vec::new();

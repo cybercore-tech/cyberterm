@@ -77,11 +77,11 @@ pub struct SpawnOptions {
 pub struct Session {
     pub term: Arc<FairMutex<Term<EventProxy>>>,
     /// Working directory and command state reported by shell integration.
-    /// Phase 1 reads it to open new panes/tabs in the same directory.
-    #[allow(dead_code)]
     pub shell: Arc<Mutex<ShellState>>,
     notifier: Notifier,
     size: GridSize,
+    /// The shell's process id, for the `/proc` working-directory fallback.
+    pid: u32,
 }
 
 fn window_size(size: GridSize, cell_width: f32, cell_height: f32) -> WindowSize {
@@ -132,6 +132,7 @@ impl Session {
             pane as u64,
         )?;
 
+        let pid = pty.child().id();
         let shell = Arc::new(Mutex::new(ShellState::default()));
         let pty = TappedPty::new(pty, shell.clone())?;
         let event_loop = PtyEventLoop::new(term.clone(), listener, pty, true, false)?;
@@ -143,11 +144,21 @@ impl Session {
             shell,
             notifier,
             size: opts.size,
+            pid,
         })
     }
 
     pub fn write(&self, bytes: impl Into<std::borrow::Cow<'static, [u8]>>) {
         self.notifier.notify(bytes);
+    }
+
+    /// The shell's current directory: what shell integration last
+    /// reported (OSC 7), else what the kernel says (Linux `/proc`).
+    pub fn cwd(&self) -> Option<PathBuf> {
+        if let Some(cwd) = self.shell.lock().cwd.clone() {
+            return Some(cwd);
+        }
+        std::fs::read_link(format!("/proc/{}/cwd", self.pid)).ok()
     }
 
     pub fn size(&self) -> GridSize {

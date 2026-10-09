@@ -28,17 +28,22 @@ use winit::platform::wayland::WindowAttributesExtWayland;
 use winit::window::{CursorIcon, UserAttentionType, Window, WindowId};
 
 use crate::clipboard::{ClipboardManager, Kind as ClipKind};
+use crate::config::TabBarMode;
 use crate::config::{self, CopyOnSelect, CursorShapeConfig, CyberConfig, Osc52Mode};
 use crate::frame::{self, CursorOptions, Frame, FrameOptions, Palette};
 use crate::input::bindings::{Action, Bindings};
 use crate::input::keyboard::{self, KeyInput, KeyMode, KeyState};
 use crate::input::{links, mouse, paste};
-use crate::renderer::{self, FontSpec, PaneView, Rect, TermRenderer};
+use crate::layout::{Divider, Tab, TabId};
+use crate::renderer::{self, FontSpec, Overlay, PaneView, Rect, TermRenderer};
 use crate::session::{GridSize, PaneId, Session, SpawnOptions, UserEvent};
 use crate::shell;
 use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
 use crate::ui::context_menu;
+
+mod input;
+mod panes;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const BELL_FLASH: Duration = Duration::from_millis(150);
@@ -74,6 +79,10 @@ struct Pane {
     /// Where the pane's cell grid sits on the surface, in physical pixels.
     rect: Rect,
     bell: Option<Instant>,
+    /// A bell rang while the pane's tab wasn't showing.
+    bell_unseen: bool,
+    /// Title set by the program (OSC 0/2).
+    title: String,
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -100,6 +109,16 @@ struct ContextMenu {
     hover: Option<usize>,
 }
 
+/// Everything one frame draws: panes (and the tab bar) as cell frames
+/// with their bell flash and dim amounts, plus plain overlay rectangles.
+#[derive(Default)]
+struct DrawList {
+    panes: Vec<(Rect, Frame, f32, f32)>,
+    overlays: Vec<Overlay>,
+    /// Index in `panes` of the focused pane.
+    focused: Option<usize>,
+}
+
 #[derive(Default)]
 struct MouseState {
     pos: PhysicalPosition<f64>,
@@ -115,14 +134,26 @@ struct MouseState {
     hover: Option<HoverLink>,
     scroll_accum: f64,
     hidden: bool,
+    /// The split divider under the pointer (for the resize cursor).
+    over_divider: Option<crate::layout::Axis>,
 }
 
 pub struct App {
     proxy: EventLoopProxy<UserEvent>,
     gpu: Option<Gpu>,
     panes: Vec<Pane>,
+    tabs: Vec<Tab>,
+    active_tab: usize,
+    next_tab: TabId,
+    /// The active tab's focused pane (kept in sync by `sync_focus`).
     focused: PaneId,
     next_pane: PaneId,
+    /// The leader key was pressed; the next key picks a leader binding.
+    leader_pending: bool,
+    /// A split divider being dragged with the mouse.
+    divider_drag: Option<Divider>,
+    /// Set when the last tab closes; the event loop exits on its next turn.
+    exit_requested: bool,
 
     config: CyberConfig,
     config_root: PathBuf,
@@ -159,14 +190,21 @@ impl App {
         initial_theme: Option<Theme>,
         shared_theme_revision: u64,
     ) -> Self {
-        let (bindings, errors) = Bindings::new(&config.keybindings);
+        let (bindings, errors) =
+            Bindings::new(&config.keybindings, config.keyboard.leader.as_deref());
         report_config_errors(&errors);
         let mut app = Self {
             proxy,
             gpu: None,
             panes: Vec::new(),
+            tabs: Vec::new(),
+            active_tab: 0,
+            next_tab: 0,
             focused: 0,
             next_pane: 0,
+            leader_pending: false,
+            divider_drag: None,
+            exit_requested: false,
             font_size: config.font.size,
             config_mtime: config::config_mtime(&config_root),
             config,
@@ -261,63 +299,71 @@ impl App {
         }
     }
 
-    /// The rectangle the (single, for now) pane's grid occupies.
-    fn content_rect(&self, gpu: &Gpu) -> Rect {
-        let pad = (self.config.window.padding.max(0.0) as f64 * gpu.window.scale_factor()) as f32;
-        Rect {
+    fn padding(&self, gpu: &Gpu) -> f32 {
+        (self.config.window.padding.max(0.0) as f64 * gpu.window.scale_factor()) as f32
+    }
+
+    /// Space between split panes: room for a divider line plus padding on
+    /// both sides of it.
+    fn gap(&self, gpu: &Gpu) -> f32 {
+        (self.padding(gpu) * 2.0 + 1.0).round()
+    }
+
+    fn tab_bar_visible(&self) -> bool {
+        match self.config.tabs.bar {
+            TabBarMode::Always => true,
+            TabBarMode::Never => false,
+            TabBarMode::Auto => self.tabs.len() > 1,
+        }
+    }
+
+    /// The tab bar's rectangle (if shown) and the area panes share.
+    fn areas(&self, gpu: &Gpu) -> (Option<Rect>, Rect) {
+        let pad = self.padding(gpu);
+        let (w, h) = (gpu.config.width as f32, gpu.config.height as f32);
+        let bar_h = gpu.renderer.cell_size().1;
+        let bar = self.tab_bar_visible().then_some(Rect {
             x: pad,
             y: pad,
-            w: (gpu.config.width as f32 - 2.0 * pad).max(1.0),
-            h: (gpu.config.height as f32 - 2.0 * pad).max(1.0),
-        }
+            w: (w - 2.0 * pad).max(1.0),
+            h: bar_h,
+        });
+        let top = match bar {
+            Some(b) => b.y + b.h + pad,
+            None => pad,
+        };
+        let content = Rect {
+            x: pad,
+            y: top,
+            w: (w - 2.0 * pad).max(1.0),
+            h: (h - top - pad).max(1.0),
+        };
+        (bar, content)
     }
 
     /// Recomputes every pane's rectangle and grid size after a window
-    /// resize, font change or padding change.
+    /// resize, split change, font change or padding change. Panes in
+    /// background tabs are resized too, so their programs always see the
+    /// size they'll be shown at.
     fn relayout(&mut self) {
         let Some(gpu) = &self.gpu else { return };
-        let rect = self.content_rect(gpu);
-        let (cols, rows) = gpu.renderer.grid_size(rect.w, rect.h);
+        let (_, area) = self.areas(gpu);
+        let gap = self.gap(gpu);
         let (cw, ch) = gpu.renderer.cell_size();
-        for pane in &mut self.panes {
-            pane.rect = rect;
-            pane.session.resize(GridSize { cols, rows }, cw, ch);
+        let mut sizes = Vec::new();
+        for tab in &self.tabs {
+            for (id, rect) in tab.visible(area, gap) {
+                let (cols, rows) = gpu.renderer.grid_size(rect.w, rect.h);
+                sizes.push((id, rect, GridSize { cols, rows }));
+            }
+        }
+        for (id, rect, size) in sizes {
+            if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id) {
+                pane.rect = rect;
+                pane.session.resize(size, cw, ch);
+            }
         }
         self.request_redraw();
-    }
-
-    fn spawn_pane(&mut self) -> std::io::Result<()> {
-        let Some(gpu) = &self.gpu else {
-            return Ok(());
-        };
-        let rect = self.content_rect(gpu);
-        let (cols, rows) = gpu.renderer.grid_size(rect.w, rect.h);
-        let (cw, ch) = gpu.renderer.cell_size();
-        let id = self.next_pane;
-        self.next_pane += 1;
-        let session = Session::spawn(
-            id,
-            self.proxy.clone(),
-            SpawnOptions {
-                size: GridSize { cols, rows },
-                cell_width: cw,
-                cell_height: ch,
-                program: self.config.shell.program.clone(),
-                term: self.config.shell.term.clone(),
-                args: self.config.shell.args.clone(),
-                cwd: None,
-                term_config: self.term_config(),
-            },
-        )?;
-        session.term.lock().is_focused = self.window_focused;
-        self.panes.push(Pane {
-            id,
-            session,
-            rect,
-            bell: None,
-        });
-        self.focused = id;
-        Ok(())
     }
 
     fn apply_font(&mut self) {
@@ -349,7 +395,10 @@ impl App {
 
     fn apply_config(&mut self, new: CyberConfig) {
         let old = std::mem::replace(&mut self.config, new);
-        let (bindings, errors) = Bindings::new(&self.config.keybindings);
+        let (bindings, errors) = Bindings::new(
+            &self.config.keybindings,
+            self.config.keyboard.leader.as_deref(),
+        );
         report_config_errors(&errors);
         self.bindings = bindings;
 
@@ -398,725 +447,6 @@ impl App {
     }
 
     // ------------------------------------------------------------------
-    // Keyboard
-    // ------------------------------------------------------------------
-
-    fn on_key(&mut self, event: KeyEvent) {
-        let state = match (event.state, event.repeat) {
-            (ElementState::Released, _) => KeyState::Release,
-            (ElementState::Pressed, true) => KeyState::Repeat,
-            (ElementState::Pressed, false) => KeyState::Press,
-        };
-
-        if self.theme_menu.is_open {
-            if state != KeyState::Release {
-                self.handle_theme_menu_key(&event.logical_key);
-                self.request_redraw();
-            }
-            return;
-        }
-
-        if self.menu.is_some() && state != KeyState::Release && self.on_menu_key(&event.logical_key)
-        {
-            self.request_redraw();
-            return;
-        }
-
-        if state == KeyState::Release && self.suppressed.remove(&event.physical_key) {
-            return;
-        }
-
-        let base = event.key_without_modifiers();
-        if state != KeyState::Release {
-            if let Some(action) = self.bindings.lookup(&event.logical_key, &base, self.mods) {
-                self.suppressed.insert(event.physical_key);
-                self.perform(action);
-                return;
-            }
-        }
-
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let mode = *pane.session.term.lock().mode();
-        let input = KeyInput {
-            key: &event.logical_key,
-            base: &base,
-            text: event.text.as_deref(),
-            location: event.location,
-            state,
-        };
-        let Some(bytes) = keyboard::encode(&input, self.mods, KeyMode::from_term(mode)) else {
-            return;
-        };
-        if state != KeyState::Release {
-            pane.session.term.lock().scroll_display(Scroll::Bottom);
-        }
-        pane.session.write(bytes);
-        if state != KeyState::Release {
-            self.blink_visible = true;
-            self.blink_last = Instant::now();
-            if self.config.mouse.hide_while_typing && !self.mouse.hidden {
-                if let Some(gpu) = &self.gpu {
-                    gpu.window.set_cursor_visible(false);
-                }
-                self.mouse.hidden = true;
-            }
-        }
-        self.request_redraw();
-    }
-
-    fn perform(&mut self, action: Action) {
-        match action {
-            Action::Copy => self.copy_selection(ClipKind::Clipboard),
-            Action::Paste => self.paste_from(ClipKind::Clipboard),
-            Action::PastePrimary => self.paste_from(ClipKind::Primary),
-            Action::SelectAll => {
-                if let Some(pane) = self.focused_pane() {
-                    let mut term = pane.session.term.lock();
-                    let top = Point::new(term.topmost_line(), Column(0));
-                    let bottom = Point::new(term.bottommost_line(), term.last_column());
-                    let mut sel = Selection::new(SelectionType::Simple, top, Side::Left);
-                    sel.update(bottom, Side::Right);
-                    term.selection = Some(sel);
-                }
-            }
-            Action::ScrollPageUp => self.scroll(Scroll::PageUp),
-            Action::ScrollPageDown => self.scroll(Scroll::PageDown),
-            Action::ScrollLineUp => self.scroll(Scroll::Delta(1)),
-            Action::ScrollLineDown => self.scroll(Scroll::Delta(-1)),
-            Action::ScrollToTop => self.scroll(Scroll::Top),
-            Action::ScrollToBottom => self.scroll(Scroll::Bottom),
-            Action::PreviousPrompt => self.jump_prompt(false),
-            Action::NextPrompt => self.jump_prompt(true),
-            Action::ClearScrollback => {
-                if let Some(pane) = self.focused_pane() {
-                    let mut term = pane.session.term.lock();
-                    term.selection = None;
-                    term.grid_mut().clear_history();
-                }
-            }
-            Action::FontIncrease => self.zoom((self.font_size + 1.0).min(72.0)),
-            Action::FontDecrease => self.zoom((self.font_size - 1.0).max(4.0)),
-            Action::FontReset => self.zoom(self.config.font.size),
-            Action::ThemeMenu => self.theme_menu.is_open = true,
-            Action::ReloadConfig => self.reload_config(true),
-        }
-        self.request_redraw();
-    }
-
-    fn zoom(&mut self, size: f32) {
-        if (size - self.font_size).abs() > f32::EPSILON {
-            self.font_size = size;
-            self.apply_font();
-        }
-    }
-
-    fn scroll(&self, scroll: Scroll) {
-        if let Some(pane) = self.focused_pane() {
-            pane.session.term.lock().scroll_display(scroll);
-        }
-    }
-
-    /// Scrolls so the previous/next shell prompt sits at the top of the
-    /// screen. Needs shell integration (`cyberterm +shell-integration`).
-    fn jump_prompt(&self, forward: bool) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let mut term = pane.session.term.lock();
-        let offset = term.grid().display_offset() as i32;
-        let top = -offset;
-        let prompts = shell::prompt_lines(&term);
-        let target = if forward {
-            prompts.iter().find(|&&l| l > top).copied()
-        } else {
-            prompts.iter().rev().find(|&&l| l < top).copied()
-        };
-        let new_offset = match target {
-            Some(line) => (-line).max(0),
-            None if forward => 0,
-            None => return,
-        };
-        term.scroll_display(Scroll::Delta(new_offset - offset));
-    }
-
-    fn copy_selection(&mut self, kind: ClipKind) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let text = pane.session.term.lock().selection_to_string();
-        if let (Some(text), Some(clipboard)) = (text, &mut self.clipboard) {
-            if !text.is_empty() {
-                clipboard.set(kind, &text, self.config.clipboard.clean_box_drawing);
-            }
-        }
-    }
-
-    fn paste_from(&mut self, kind: ClipKind) {
-        let Some(text) = self.clipboard.as_mut().and_then(|c| c.get(kind)) else {
-            return;
-        };
-        self.paste(&text);
-    }
-
-    fn paste(&self, text: &str) {
-        if text.is_empty() {
-            return;
-        }
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let bracketed = {
-            let mut term = pane.session.term.lock();
-            term.scroll_display(Scroll::Bottom);
-            term.mode().contains(TermMode::BRACKETED_PASTE)
-        };
-        pane.session.write(paste::paste_bytes(text, bracketed));
-    }
-
-    // ------------------------------------------------------------------
-    // Mouse
-    // ------------------------------------------------------------------
-
-    /// The focused pane's cell under the pointer, clamped to the grid, and
-    /// which half of the cell the pointer is in.
-    fn cell_at_pointer(&self) -> Option<(usize, usize, Side, bool)> {
-        let gpu = self.gpu.as_ref()?;
-        let pane = self.focused_pane()?;
-        let (cw, ch) = gpu.renderer.cell_size();
-        let size = pane.session.size();
-        let x = self.mouse.pos.x as f32 - pane.rect.x;
-        let y = self.mouse.pos.y as f32 - pane.rect.y;
-        let inside = x >= 0.0 && y >= 0.0 && x < size.cols as f32 * cw && y < size.rows as f32 * ch;
-        let col = ((x / cw).floor().max(0.0) as usize).min(size.cols - 1);
-        let row = ((y / ch).floor().max(0.0) as usize).min(size.rows - 1);
-        let side = if (x / cw).fract() < 0.5 && x >= 0.0 {
-            Side::Left
-        } else {
-            Side::Right
-        };
-        Some((row, col, side, inside))
-    }
-
-    fn reporting_mouse(&self) -> Option<mouse::MouseMode> {
-        let pane = self.focused_pane()?;
-        let mode = mouse::MouseMode::from_term(*pane.session.term.lock().mode());
-        (mode.active() && !self.mods.shift_key()).then_some(mode)
-    }
-
-    fn report_mouse(
-        &mut self,
-        button: mouse::Button,
-        action: mouse::Action,
-        row: usize,
-        col: usize,
-    ) {
-        let Some(mode) = self.reporting_mouse() else {
-            return;
-        };
-        if let Some(bytes) = mouse::encode(button, action, self.mods, col, row, mode) {
-            if let Some(pane) = self.focused_pane() {
-                pane.session.write(bytes);
-            }
-        }
-        self.mouse.last_report_cell = Some((row, col));
-    }
-
-    fn on_cursor_moved(&mut self, pos: PhysicalPosition<f64>) {
-        self.mouse.pos = pos;
-        if self.mouse.hidden {
-            if let Some(gpu) = &self.gpu {
-                gpu.window.set_cursor_visible(true);
-            }
-            self.mouse.hidden = false;
-        }
-        let Some((row, col, side, _)) = self.cell_at_pointer() else {
-            return;
-        };
-
-        if let (Some(menu), Some(layout)) = (&self.menu, self.menu_layout()) {
-            let hover = context_menu::item_at(&layout, menu.items.len(), row, col)
-                .filter(|&i| menu.items[i].0.enabled);
-            if hover != menu.hover {
-                if let Some(menu) = &mut self.menu {
-                    menu.hover = hover;
-                }
-                self.request_redraw();
-            }
-            return;
-        }
-
-        if let Some(mode) = self.reporting_mouse() {
-            let held = self.mouse.reported_button;
-            if mode.reports_motion(held.is_some())
-                && self.mouse.last_report_cell != Some((row, col))
-            {
-                self.report_mouse(
-                    held.unwrap_or(mouse::Button::None),
-                    mouse::Action::Motion,
-                    row,
-                    col,
-                );
-            }
-            return;
-        }
-
-        if self.mouse.selecting {
-            self.extend_selection(row, col, side);
-        }
-        self.update_hover(row, col);
-    }
-
-    fn extend_selection(&mut self, row: usize, col: usize, side: Side) {
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let mut term = pane.session.term.lock();
-        // Dragging past the top or bottom edge scrolls the scrollback.
-        let y = self.mouse.pos.y as f32;
-        if y < pane.rect.y {
-            term.scroll_display(Scroll::Delta(1));
-        } else if y > pane.rect.y + pane.rect.h {
-            term.scroll_display(Scroll::Delta(-1));
-        }
-        let point = frame::viewport_to_point(row, col, term.grid().display_offset());
-        let mut anchor_used = false;
-        if let Some((anchor, anchor_side, ty)) = self.mouse.anchor {
-            if anchor == point && anchor_side == side {
-                return;
-            }
-            term.selection = Some(Selection::new(ty, anchor, anchor_side));
-            anchor_used = true;
-        }
-        if let Some(sel) = &mut term.selection {
-            sel.update(point, side);
-        }
-        drop(term);
-        if anchor_used {
-            self.mouse.anchor = None;
-        }
-        self.request_redraw();
-    }
-
-    fn update_hover(&mut self, row: usize, col: usize) {
-        let hover = self.link_at(row, col);
-        if hover != self.mouse.hover {
-            if let Some(gpu) = &self.gpu {
-                gpu.window.set_cursor(if hover.is_some() {
-                    CursorIcon::Pointer
-                } else {
-                    CursorIcon::Text
-                });
-            }
-            self.mouse.hover = hover;
-            self.request_redraw();
-        }
-    }
-
-    /// An OSC 8 hyperlink or plain-text URL at a viewport cell.
-    fn link_at(&self, row: usize, col: usize) -> Option<HoverLink> {
-        let pane = self.focused_pane()?;
-        let term = pane.session.term.lock();
-        let offset = term.grid().display_offset();
-        let point = frame::viewport_to_point(row, col, offset);
-        let line = &term.grid()[point.line];
-        let cols = term.columns();
-
-        if let Some(link) = line[Column(col)].hyperlink() {
-            if !shell::is_mark(link.uri()) {
-                let same = |c: usize| line[Column(c)].hyperlink().is_some_and(|l| l == link);
-                let mut start = col;
-                while start > 0 && same(start - 1) {
-                    start -= 1;
-                }
-                let mut end = col + 1;
-                while end < cols && same(end) {
-                    end += 1;
-                }
-                return Some(HoverLink {
-                    row,
-                    cols: start..end,
-                    uri: link.uri().to_string(),
-                });
-            }
-        }
-
-        let mut text = String::new();
-        let mut char_cols = Vec::new();
-        for c in 0..cols {
-            let cell = &line[Column(c)];
-            if cell
-                .flags
-                .intersects(alacritty_terminal::term::cell::Flags::WIDE_CHAR_SPACER)
-            {
-                continue;
-            }
-            text.push(cell.c);
-            char_cols.push(c);
-        }
-        let index = char_cols.iter().position(|&c| c >= col)?;
-        let (range, uri) = links::url_at(&text, index)?;
-        let start = char_cols[range.start];
-        let end = char_cols.get(range.end).copied().unwrap_or(cols);
-        Some(HoverLink {
-            row,
-            cols: start..end,
-            uri,
-        })
-    }
-
-    fn on_mouse_input(&mut self, state: ElementState, button: MouseButton) {
-        let Some((row, col, side, inside)) = self.cell_at_pointer() else {
-            return;
-        };
-        let pressed = state == ElementState::Pressed;
-
-        if self.menu.is_some() {
-            if pressed {
-                self.on_menu_click(button, row, col);
-                self.request_redraw();
-            }
-            return;
-        }
-
-        let report_button = match button {
-            MouseButton::Left => mouse::Button::Left,
-            MouseButton::Middle => mouse::Button::Middle,
-            MouseButton::Right => mouse::Button::Right,
-            _ => return,
-        };
-
-        if self.reporting_mouse().is_some() {
-            if pressed {
-                self.mouse.reported_button = Some(report_button);
-                self.report_mouse(report_button, mouse::Action::Press, row, col);
-            } else {
-                self.mouse.reported_button = None;
-                self.report_mouse(report_button, mouse::Action::Release, row, col);
-            }
-            return;
-        }
-
-        match (button, pressed) {
-            (MouseButton::Left, true) => {
-                if self.mods.control_key() {
-                    if let Some(link) = &self.mouse.hover {
-                        open_link(&link.uri);
-                        return;
-                    }
-                }
-                if !inside {
-                    return;
-                }
-                if self.mods.shift_key() && self.extend_existing_selection(row, col, side) {
-                    self.mouse.selecting = true;
-                    self.mouse.anchor = None;
-                    self.request_redraw();
-                    return;
-                }
-                let now = Instant::now();
-                self.mouse.clicks = match self.mouse.last_click {
-                    Some((at, r, c)) if now - at < DOUBLE_CLICK && (r, c) == (row, col) => {
-                        (self.mouse.clicks % 3) + 1
-                    }
-                    _ => 1,
-                };
-                self.mouse.last_click = Some((now, row, col));
-                let Some(pane) = self.focused_pane() else {
-                    return;
-                };
-                let mut term = pane.session.term.lock();
-                let point = frame::viewport_to_point(row, col, term.grid().display_offset());
-                let ty = match self.mouse.clicks {
-                    1 if self.mods.alt_key() => SelectionType::Block,
-                    1 => SelectionType::Simple,
-                    2 => SelectionType::Semantic,
-                    _ => SelectionType::Lines,
-                };
-                let anchor = if self.mouse.clicks == 1 {
-                    term.selection = None;
-                    Some((point, side, ty))
-                } else {
-                    let mut sel = Selection::new(ty, point, side);
-                    sel.update(point, side);
-                    term.selection = Some(sel);
-                    None
-                };
-                drop(term);
-                self.mouse.anchor = anchor;
-                self.mouse.selecting = true;
-            }
-            (MouseButton::Left, false) => {
-                let was_selecting = self.mouse.selecting && self.mouse.anchor.is_none();
-                self.mouse.selecting = false;
-                self.mouse.anchor = None;
-                if was_selecting {
-                    self.copy_on_select();
-                }
-            }
-            (MouseButton::Middle, true) => self.paste_from(ClipKind::Primary),
-            (MouseButton::Right, true) => self.open_menu(row, col),
-            _ => {}
-        }
-        self.request_redraw();
-    }
-
-    fn on_wheel(&mut self, delta: MouseScrollDelta) {
-        if self.menu.take().is_some() {
-            self.request_redraw();
-            return;
-        }
-        let cell_height = self
-            .gpu
-            .as_ref()
-            .map(|g| g.renderer.cell_size().1 as f64)
-            .unwrap_or(16.0);
-        self.mouse.scroll_accum += match delta {
-            MouseScrollDelta::LineDelta(_, y) => {
-                y as f64 * self.config.scrollback.multiplier as f64
-            }
-            MouseScrollDelta::PixelDelta(p) => p.y / cell_height,
-        };
-        let lines = self.mouse.scroll_accum.trunc() as i32;
-        if lines == 0 {
-            return;
-        }
-        self.mouse.scroll_accum -= lines as f64;
-
-        let Some((row, col, _, _)) = self.cell_at_pointer() else {
-            return;
-        };
-        if self.reporting_mouse().is_some() {
-            let button = if lines > 0 {
-                mouse::Button::WheelUp
-            } else {
-                mouse::Button::WheelDown
-            };
-            for _ in 0..lines.unsigned_abs() {
-                self.report_mouse(button, mouse::Action::Press, row, col);
-            }
-            return;
-        }
-
-        let Some(pane) = self.focused_pane() else {
-            return;
-        };
-        let mut term = pane.session.term.lock();
-        let mode = *term.mode();
-        if mode.contains(TermMode::ALT_SCREEN | TermMode::ALTERNATE_SCROLL)
-            && !self.mods.shift_key()
-        {
-            // Full-screen programs without mouse support (less, man) get
-            // arrow keys instead, as in xterm's alternateScroll.
-            drop(term);
-            let arrow: &[u8] = match (lines > 0, mode.contains(TermMode::APP_CURSOR)) {
-                (true, true) => b"\x1bOA",
-                (true, false) => b"\x1b[A",
-                (false, true) => b"\x1bOB",
-                (false, false) => b"\x1b[B",
-            };
-            let bytes: Vec<u8> = arrow.repeat(lines.unsigned_abs() as usize);
-            pane.session.write(bytes);
-        } else {
-            term.scroll_display(Scroll::Delta(lines));
-            drop(term);
-            self.request_redraw();
-        }
-    }
-
-    /// Copies a just-finished mouse selection where `copy_on_select` says.
-    fn copy_on_select(&mut self) {
-        match self.config.mouse.copy_on_select {
-            CopyOnSelect::Off => {}
-            CopyOnSelect::Primary => self.copy_selection(ClipKind::Primary),
-            CopyOnSelect::Clipboard => self.copy_selection(ClipKind::Clipboard),
-            CopyOnSelect::Both => {
-                self.copy_selection(ClipKind::Primary);
-                self.copy_selection(ClipKind::Clipboard);
-            }
-        }
-    }
-
-    /// Shift+click: move the end of the current selection to the pointer.
-    fn extend_existing_selection(&mut self, row: usize, col: usize, side: Side) -> bool {
-        let Some(pane) = self.focused_pane() else {
-            return false;
-        };
-        let mut term = pane.session.term.lock();
-        let point = frame::viewport_to_point(row, col, term.grid().display_offset());
-        match &mut term.selection {
-            Some(sel) => {
-                sel.update(point, side);
-                true
-            }
-            None => false,
-        }
-    }
-
-    // ------------------------------------------------------------------
-    // Context menu
-    // ------------------------------------------------------------------
-
-    fn open_menu(&mut self, row: usize, col: usize) {
-        let has_selection = self
-            .focused_pane()
-            .and_then(|p| p.session.term.lock().selection_to_string())
-            .is_some_and(|t| !t.is_empty());
-        let has_clipboard = self
-            .clipboard
-            .as_mut()
-            .and_then(|c| c.get(ClipKind::Clipboard))
-            .is_some_and(|t| !t.is_empty());
-
-        let mut items = Vec::new();
-        let mut add = |label: &str, hint: String, enabled: bool, action: MenuAction| {
-            items.push((
-                context_menu::Item {
-                    label: label.to_string(),
-                    hint,
-                    enabled,
-                },
-                action,
-            ));
-        };
-        if let Some(link) = self.mouse.hover.clone() {
-            add(
-                "Open Link",
-                "Ctrl+Click".into(),
-                links::openable(&link.uri),
-                MenuAction::OpenLink(link.uri.clone()),
-            );
-            add(
-                "Copy Link",
-                String::new(),
-                true,
-                MenuAction::CopyText(link.uri),
-            );
-        }
-        let b = &self.bindings;
-        add(
-            "Copy",
-            b.hint(Action::Copy),
-            has_selection,
-            MenuAction::Do(Action::Copy),
-        );
-        add(
-            "Paste",
-            b.hint(Action::Paste),
-            has_clipboard,
-            MenuAction::Do(Action::Paste),
-        );
-        add(
-            "Select All",
-            b.hint(Action::SelectAll),
-            true,
-            MenuAction::Do(Action::SelectAll),
-        );
-        add(
-            "Clear Scrollback",
-            b.hint(Action::ClearScrollback),
-            true,
-            MenuAction::Do(Action::ClearScrollback),
-        );
-        add(
-            "Themes…",
-            b.hint(Action::ThemeMenu),
-            true,
-            MenuAction::Do(Action::ThemeMenu),
-        );
-        add(
-            "Reload Config",
-            b.hint(Action::ReloadConfig),
-            true,
-            MenuAction::Do(Action::ReloadConfig),
-        );
-
-        self.menu = Some(ContextMenu {
-            row,
-            col,
-            items,
-            hover: None,
-        });
-        self.request_redraw();
-    }
-
-    fn menu_layout(&self) -> Option<context_menu::Layout> {
-        let menu = self.menu.as_ref()?;
-        let size = self.focused_pane()?.session.size();
-        let items: Vec<_> = menu.items.iter().map(|(item, _)| item.clone()).collect();
-        Some(context_menu::layout(
-            &items, menu.row, menu.col, size.rows, size.cols,
-        ))
-    }
-
-    fn on_menu_click(&mut self, button: MouseButton, row: usize, col: usize) {
-        let Some(layout) = self.menu_layout() else {
-            return;
-        };
-        let count = self.menu.as_ref().map_or(0, |m| m.items.len());
-        match (button, context_menu::item_at(&layout, count, row, col)) {
-            (MouseButton::Left, Some(index)) => self.activate_menu_item(index),
-            (MouseButton::Left, None) if context_menu::contains(&layout, row, col) => {}
-            (MouseButton::Right, _) => self.open_menu(row, col),
-            _ => self.menu = None,
-        }
-    }
-
-    fn activate_menu_item(&mut self, index: usize) {
-        let Some(menu) = self.menu.take() else { return };
-        let Some((item, action)) = menu.items.get(index).cloned() else {
-            return;
-        };
-        if !item.enabled {
-            self.menu = Some(menu);
-            return;
-        }
-        match action {
-            MenuAction::Do(action) => self.perform(action),
-            MenuAction::OpenLink(uri) => open_link(&uri),
-            MenuAction::CopyText(text) => {
-                if let Some(clipboard) = &mut self.clipboard {
-                    clipboard.set(ClipKind::Clipboard, &text, false);
-                }
-            }
-        }
-    }
-
-    /// Keyboard navigation while the menu is open. Returns false for keys
-    /// that should close the menu and then be handled normally.
-    fn on_menu_key(&mut self, key: &Key) -> bool {
-        let Some(menu) = &mut self.menu else {
-            return false;
-        };
-        let enabled: Vec<usize> = (0..menu.items.len())
-            .filter(|&i| menu.items[i].0.enabled)
-            .collect();
-        let position = menu
-            .hover
-            .and_then(|h| enabled.iter().position(|&i| i == h));
-        match key {
-            Key::Named(NamedKey::Escape) => self.menu = None,
-            Key::Named(NamedKey::ArrowDown) if !enabled.is_empty() => {
-                menu.hover = Some(enabled[position.map_or(0, |p| (p + 1) % enabled.len())]);
-            }
-            Key::Named(NamedKey::ArrowUp) if !enabled.is_empty() => {
-                let last = enabled.len() - 1;
-                menu.hover = Some(enabled[position.map_or(last, |p| (p + last) % enabled.len())]);
-            }
-            Key::Named(NamedKey::Enter) => match menu.hover {
-                Some(index) => self.activate_menu_item(index),
-                None => self.menu = None,
-            },
-            _ => {
-                self.menu = None;
-                return false;
-            }
-        }
-        true
-    }
-
-    // ------------------------------------------------------------------
     // Terminal events
     // ------------------------------------------------------------------
 
@@ -1127,16 +457,18 @@ impl App {
         match event {
             TermEvent::Wakeup => self.request_redraw(),
             TermEvent::Title(title) => {
+                self.panes[index].title = title;
                 if id == self.focused {
-                    if let Some(gpu) = &self.gpu {
-                        gpu.window.set_title(&title);
-                    }
+                    self.update_window_title();
                 }
+                self.request_redraw();
             }
             TermEvent::ResetTitle => {
-                if let Some(gpu) = &self.gpu {
-                    gpu.window.set_title("Cyberterm");
+                self.panes[index].title.clear();
+                if id == self.focused {
+                    self.update_window_title();
                 }
+                self.request_redraw();
             }
             TermEvent::PtyWrite(text) => self.panes[index].session.write(text.into_bytes()),
             TermEvent::ClipboardStore(ty, text) => {
@@ -1176,12 +508,9 @@ impl App {
             }
             TermEvent::Bell => self.ring_bell(index),
             TermEvent::ChildExit(_) | TermEvent::Exit => {
-                self.panes.remove(index);
-                if self.panes.is_empty() {
+                self.remove_pane(id);
+                if self.exit_requested {
                     event_loop.exit();
-                } else if id == self.focused {
-                    self.focused = self.panes[0].id;
-                    self.request_redraw();
                 }
             }
             TermEvent::CursorBlinkingChange => {
@@ -1195,6 +524,10 @@ impl App {
 
     fn ring_bell(&mut self, index: usize) {
         let bell = self.config.bell.clone();
+        let id = self.panes[index].id;
+        if !self.active().is_some_and(|t| t.root.contains(id)) {
+            self.panes[index].bell_unseen = true;
+        }
         if bell.visual {
             self.panes[index].bell = Some(Instant::now());
             self.request_redraw();
@@ -1214,10 +547,61 @@ impl App {
     // Drawing
     // ------------------------------------------------------------------
 
-    fn build_frames(&self) -> Vec<(Rect, Frame, f32)> {
+    fn tab_labels(&self) -> Vec<ui::tab_bar::TabLabel> {
+        self.tabs
+            .iter()
+            .enumerate()
+            .map(|(i, t)| ui::tab_bar::TabLabel {
+                title: self.tab_title(t),
+                active: i == self.active_tab,
+                bell: t
+                    .root
+                    .panes()
+                    .iter()
+                    .any(|id| self.pane(*id).is_some_and(|p| p.bell_unseen)),
+                zoomed: t.zoomed,
+                broadcast: t.broadcast,
+            })
+            .collect()
+    }
+
+    /// The tab under a window position, if it's on the tab bar.
+    fn tab_at(&self, x: f32, y: f32) -> Option<usize> {
+        let gpu = self.gpu.as_ref()?;
+        let (Some(bar), _) = self.areas(gpu) else {
+            return None;
+        };
+        if !(x >= bar.x && x < bar.x + bar.w && y >= bar.y && y < bar.y + bar.h) {
+            return None;
+        }
+        let cw = gpu.renderer.cell_size().0;
+        let cols = (bar.w / cw).floor().max(1.0) as usize;
+        let colors = ui::tab_bar::Colors {
+            fg: [0; 3],
+            bg: [0; 3],
+            dim: [0; 3],
+            accent: [0; 3],
+            alert: [0; 3],
+        };
+        let built = ui::tab_bar::build(&self.tab_labels(), cols, None, &colors);
+        ui::tab_bar::tab_at(&built, ((x - bar.x) / cw) as usize)
+    }
+
+    fn build_frames(&self) -> DrawList {
         let now = Instant::now();
-        let mut frames = Vec::new();
-        for pane in &self.panes {
+        let mut list = DrawList::default();
+        let Some(gpu) = &self.gpu else {
+            return list;
+        };
+        let accent = frame::hex_to_rgb(self.palette.cursor);
+        let dim_color = frame::hex_to_rgb(self.palette.ansi[8]);
+        let bg = frame::hex_to_rgb(self.palette.bg);
+        let fg = frame::hex_to_rgb(self.palette.fg);
+        let tab = self.active();
+        let multiple = tab.is_some_and(|t| t.root.panes().len() > 1 && !t.zoomed);
+
+        for (id, rect) in self.visible_rects() {
+            let Some(pane) = self.pane(id) else { continue };
             let focused = pane.id == self.focused;
             let hover: Vec<(usize, std::ops::Range<usize>)> = self
                 .mouse
@@ -1237,12 +621,7 @@ impl App {
                 .into_iter()
                 .map(|line| line.into_iter().map(|s| (s.text, s.color)).collect())
                 .collect();
-                Frame::from_spans(
-                    &lines,
-                    size.cols,
-                    size.rows,
-                    frame::hex_to_rgb(self.palette.bg),
-                )
+                Frame::from_spans(&lines, size.cols, size.rows, bg)
             } else {
                 let term = pane.session.term.lock();
                 frame::build(
@@ -1266,13 +645,14 @@ impl App {
                 if let (Some(menu), Some(layout)) = (&self.menu, self.menu_layout()) {
                     let items: Vec<_> = menu.items.iter().map(|(item, _)| item.clone()).collect();
                     let colors = context_menu::Colors {
-                        fg: frame::hex_to_rgb(self.palette.fg),
-                        bg: frame::hex_to_rgb(self.palette.bg),
-                        dim: frame::hex_to_rgb(self.palette.ansi[8]),
-                        accent: frame::hex_to_rgb(self.palette.cursor),
+                        fg,
+                        bg,
+                        dim: dim_color,
+                        accent,
                     };
                     context_menu::draw(&mut frame, &layout, &items, menu.hover, &colors);
                 }
+                list.focused = Some(list.panes.len());
             }
             let flash = pane
                 .bell
@@ -1280,13 +660,76 @@ impl App {
                 .filter(|d| *d < BELL_FLASH)
                 .map(|d| 1.0 - d.as_secs_f32() / BELL_FLASH.as_secs_f32())
                 .unwrap_or(0.0);
-            frames.push((pane.rect, frame, flash));
+            let dim = if multiple && !focused {
+                self.config.splits.inactive_dim.clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            list.panes.push((rect, frame, flash, dim));
         }
-        frames
+
+        // Dividers: a one-pixel line in the middle of each gap, in the
+        // accent color while broadcasting.
+        if let Some(tab) = tab.filter(|t| !t.zoomed) {
+            let (_, area) = self.areas(gpu);
+            let line = (gpu.window.scale_factor() as f32).round().max(1.0);
+            let color = if tab.broadcast { accent } else { dim_color };
+            for d in tab.root.dividers(area, self.gap(gpu)) {
+                let r = d.rect;
+                let rect = match d.axis {
+                    crate::layout::Axis::Horizontal => Rect {
+                        x: (r.x + (r.w - line) / 2.0).round(),
+                        w: line,
+                        ..r
+                    },
+                    crate::layout::Axis::Vertical => Rect {
+                        y: (r.y + (r.h - line) / 2.0).round(),
+                        h: line,
+                        ..r
+                    },
+                };
+                list.overlays.push(Overlay {
+                    rect,
+                    color,
+                    alpha: 1.0,
+                });
+            }
+        }
+
+        let status = self.leader_pending.then_some("LEADER");
+        let (bar_rect, area) = self.areas(gpu);
+        let (cw, _) = gpu.renderer.cell_size();
+        if let Some(bar_rect) = bar_rect {
+            let labels = self.tab_labels();
+            let cols = (bar_rect.w / cw).floor().max(1.0) as usize;
+            let colors = ui::tab_bar::Colors {
+                fg,
+                bg,
+                dim: fg,
+                accent,
+                alert: frame::hex_to_rgb(self.palette.ansi[1]),
+            };
+            let bar = ui::tab_bar::build(&labels, cols, status, &colors);
+            list.panes.push((bar_rect, bar.frame, 0.0, 0.0));
+        } else if let Some(status) = status {
+            // No tab bar: show the pending leader as a chip in the corner.
+            let text = format!(" {status} ");
+            let cols = text.chars().count();
+            let colors_bg = frame::hex_to_rgb(self.palette.ansi[1]);
+            let chip = Frame::from_spans(&[vec![(text, bg)]], cols, 1, colors_bg);
+            let rect = Rect {
+                x: area.x + area.w - cols as f32 * cw,
+                y: area.y,
+                w: cols as f32 * cw,
+                h: gpu.renderer.cell_size().1,
+            };
+            list.panes.push((rect, chip, 0.0, 0.0));
+        }
+        list
     }
 
     fn draw(&mut self) {
-        let frames = self.build_frames();
+        let list = self.build_frames();
         let Some(gpu) = &mut self.gpu else { return };
 
         let surface_texture = match gpu.surface.get_current_texture() {
@@ -1313,9 +756,10 @@ impl App {
 
         // The clear color is the focused pane's background (which a program
         // may have changed with OSC 11), so padding matches the cells.
-        let bg = frames
-            .first()
-            .map(|(_, f, _)| f.bg)
+        let bg = list
+            .focused
+            .and_then(|i| list.panes.get(i))
+            .map(|(_, f, _, _)| f.bg)
             .unwrap_or_else(|| frame::hex_to_rgb(self.palette.bg));
         let opacity = self.config.opacity.clamp(0.0, 1.0) as f64;
         let mul = if gpu.premultiply_bg { opacity } else { 1.0 };
@@ -1326,12 +770,14 @@ impl App {
             a: opacity,
         };
 
-        let views: Vec<PaneView<'_>> = frames
+        let views: Vec<PaneView<'_>> = list
+            .panes
             .iter()
-            .map(|(rect, frame, flash)| PaneView {
+            .map(|(rect, frame, flash, dim)| PaneView {
                 rect: *rect,
                 frame,
                 flash: *flash,
+                dim: *dim,
             })
             .collect();
         gpu.renderer.render(
@@ -1347,6 +793,7 @@ impl App {
                 premultiply: gpu.premultiply_bg,
             },
             &views,
+            &list.overlays,
         );
         gpu.queue.submit(std::iter::once(encoder.finish()));
         gpu.window.pre_present_notify();
@@ -1354,7 +801,7 @@ impl App {
 
         // Tell the input method where the cursor is, so its candidate
         // window pops up next to the text being composed.
-        if let Some((rect, frame, _)) = frames.first() {
+        if let Some((rect, frame, _, _)) = list.focused.and_then(|i| list.panes.get(i)) {
             if let Some(cursor) = frame.cursor {
                 let (cw, ch) = gpu.renderer.cell_size();
                 gpu.window.set_ime_cursor_area(
@@ -1553,7 +1000,7 @@ impl ApplicationHandler<UserEvent> for App {
             event_loop.exit();
             return;
         }
-        if let Err(e) = self.spawn_pane() {
+        if let Err(e) = self.open_tab(None) {
             eprintln!("CRITICAL: Failed to spawn shell: {e}");
             event_loop.exit();
         }
@@ -1600,6 +1047,8 @@ impl ApplicationHandler<UserEvent> for App {
                 if !focused {
                     self.suppressed.clear();
                     self.menu = None;
+                    self.leader_pending = false;
+                    self.divider_drag = None;
                 }
                 self.request_redraw();
             }
@@ -1635,6 +1084,10 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.exit_requested {
+            event_loop.exit();
+            return;
+        }
         let now = Instant::now();
         if now.duration_since(self.last_poll) >= POLL_INTERVAL {
             self.last_poll = now;
