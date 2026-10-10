@@ -83,6 +83,8 @@ pub fn adapter(argv: &[String]) -> Option<&'static str> {
     let program = Path::new(argv.first()?).file_name()?.to_str()?;
     match program {
         "claude" => Some("claude"),
+        "codex" => Some("codex"),
+        "gemini" => Some("gemini"),
         _ => None,
     }
 }
@@ -496,10 +498,25 @@ pub fn exec(id: &str, cfg: &AgentsConfig) -> Result<std::convert::Infallible, St
     }
     let log = crate::flight_log::log_path(&s.id);
     let mut extra = Vec::new();
-    if cfg.hooks && adapter(&s.argv) == Some("claude") {
-        let hook = format!("{} +hook claude", self_path());
-        extra.push("--settings".to_string());
-        extra.push(crate::flight_log::claude_settings(&hook));
+    if cfg.hooks {
+        match adapter(&s.argv) {
+            Some("claude") => {
+                let hook = format!("{} +hook claude", self_path());
+                extra.push("--settings".to_string());
+                extra.push(crate::flight_log::claude_settings(&hook));
+            }
+            Some("codex") => {
+                // Same command every time, so Codex's one-time review of
+                // these hooks holds for later sessions.
+                let hook = format!("{} +hook codex", self_path());
+                for o in crate::flight_log::codex_overrides(&hook) {
+                    extra.push("-c".to_string());
+                    extra.push(o);
+                }
+            }
+            // Gemini's hooks come from `+agent setup gemini`.
+            _ => {}
+        }
     }
     let argv = s.command_with(&extra);
     let mut cmd = Command::new(&argv[0]);
@@ -648,7 +665,8 @@ fn remove_in(state: &Path, id: &str, force: bool) -> Result<String, String> {
         }
     }
     let _ = std::fs::remove_file(record_path(state, id));
-    notes.push("removed the session".into());
+    let _ = std::fs::remove_file(state.join(format!("{id}.jsonl")));
+    notes.push("removed the session and its flight log".into());
     Ok(notes.join(", "))
 }
 
@@ -726,6 +744,7 @@ cyberterm +agent: run any coding agent in a worktree of its own
   cyberterm +agent list                  sessions: running, changed files, commits
   cyberterm +agent log [id] [-o] [-f]    what it did: prompts, commands, edits
                                          (-o with output, -f keep following)
+  cyberterm +agent setup [agent]         what each agent reports; opt-in hooks (Gemini)
   cyberterm +agent rm <id> [--force]     remove a session and its worktree
                                          (--force: even with changes or commits)
 
@@ -762,6 +781,7 @@ pub fn run_cli(args: &[String], cfg: &AgentsConfig) -> i32 {
                 }
             }
         }
+        Some("setup") => crate::agent_setup::run(&args[1..], cfg),
         Some("log") => {
             let follow = args.iter().any(|a| a == "-f" || a == "--follow");
             let output = args.iter().any(|a| a == "-o" || a == "--output");
@@ -914,7 +934,12 @@ fn list(cfg: &AgentsConfig, with_agents: bool) {
                 Prompt::Flag(f) => format!("takes a task ({f})"),
                 Prompt::None => "start, then type the task".to_string(),
             };
-            println!("  {:<14} {:<16} {}", l.name, l.label, how);
+            println!(
+                "  {:<14} {:<16} {how:<28} {}",
+                l.name,
+                l.label,
+                crate::agent_setup::coverage(&l.name)
+            );
         }
         println!();
     }
@@ -1081,6 +1106,7 @@ mod tests {
         };
 
         let a = create_in(&state, &cfg, req("fix the test")).unwrap();
+        std::fs::write(state.join("fix-the-test.jsonl"), "{}\n").unwrap();
         assert_eq!(a.id, "fix-the-test");
         let w = a.worktree.as_ref().unwrap();
         assert_eq!(w.path, root.join("api-fix-the-test"));
@@ -1127,6 +1153,7 @@ mod tests {
         assert!(!w.path.exists());
         assert!(!branch_exists(&repo, "agent/fix-the-test"));
         assert!(load_in(&state, "fix-the-test").is_err());
+        assert!(!state.join("fix-the-test.jsonl").exists());
 
         // A commit on its branch: the branch is kept.
         let bw = b.worktree.as_ref().unwrap();

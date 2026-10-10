@@ -358,11 +358,17 @@ It works with any agent, at the level of detail each one allows:
 | Source | Agents | What it records |
 |---|---|---|
 | Shell recorder | any agent that runs commands through `bash` or `zsh` (most do) | every command: text, directory, exit code, duration |
-| Native hooks | Claude Code (more to come) | prompts, command output, edits, other tools, waiting / done |
+| Native hooks | Claude Code, Codex, Gemini CLI | prompts, command output and exit codes, edits, other tools, waiting / done |
 | Open format | anything: another agent's hooks, a plugin, a wrapper script | whatever it sends |
 
 - **The shell recorder** turns on through `BASH_ENV` and `ZDOTDIR` for the agent only. Your own startup files still run exactly as before (your `BASH_ENV`, `.zshenv`, `.zprofile`, `.zshrc`, `.zlogin` and `ZDOTDIR`). Commands run through `sh -c` aren't recorded.
 - **Claude Code's hooks** are added for that session only (`--settings`); your Claude configuration isn't touched.
+- **Codex's hooks** are added for that session only (`-c`). Codex asks you to review hooks it hasn't seen, so approve Cyberterm's once (**Trust all and continue**) on your first Codex agent; they're remembered after that. Codex also asks to trust each new folder, so expect that question for every new worktree.
+- **Gemini CLI** can't take hooks for one session, so it's opt-in: `cyberterm +agent setup gemini` adds Cyberterm's hooks to `~/.gemini/settings.json`.
+  - **Beside yours:** they go next to any hooks you already have.
+  - **Inert elsewhere:** they do nothing outside Cyberterm's agent sessions.
+  - **Reversible:** `--remove` takes them out again, and the file is backed up first.
+- `cyberterm +agent setup` lists what each of your agents reports.
 - **The open format** is one JSON object per line on the stdin of `cyberterm +hook event`, inside an agent session (or with `--session <id>`):
 
   ```bash

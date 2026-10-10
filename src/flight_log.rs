@@ -180,48 +180,187 @@ pub fn from_open(v: &Value) -> Result<Event, String> {
 }
 
 // ----------------------------------------------------------------------
-// Claude Code hooks
+// Agents' own hooks: Claude Code, Codex, Gemini CLI
 // ----------------------------------------------------------------------
+//
+// Claude Code and Codex speak the same hook protocol (PreToolUse,
+// PostToolUse, Stop, ...); Gemini CLI has its own names (BeforeTool,
+// AfterTool, AfterAgent, ...) and shapes. All three send one JSON object
+// per hook on stdin.
+//
+// How the hooks get there:
+// - Claude Code: `--settings <json>` for that session only.
+// - Codex: `-c hooks.<Event>=[...]` for that session only. Codex asks you
+//   to review hooks it hasn't seen before; you approve Cyberterm's once.
+// - Gemini CLI: has no per-session way in (its system settings must be
+//   root-owned), so `cyberterm +agent setup gemini` adds the hooks to
+//   ~/.gemini/settings.json once -- they do nothing outside Cyberterm's
+//   agent sessions.
 
-/// The `--settings` JSON that makes Claude Code report its session to
-/// `hook` (a shell command: this binary's `+hook claude`).
-pub fn claude_settings(hook: &str) -> String {
-    let entry = |matcher: Option<&str>| {
-        let mut e = serde_json::json!({
-            "hooks": [{ "type": "command", "command": hook, "timeout": 10 }]
-        });
-        if let Some(m) = matcher {
-            e["matcher"] = Value::String(m.into());
+/// The agents whose hooks Cyberterm understands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Agent {
+    Claude,
+    Codex,
+    Gemini,
+}
+
+impl Agent {
+    pub fn parse(s: &str) -> Option<Agent> {
+        match s {
+            "claude" => Some(Agent::Claude),
+            "codex" => Some(Agent::Codex),
+            "gemini" => Some(Agent::Gemini),
+            _ => None,
         }
-        Value::Array(vec![e])
-    };
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Agent::Claude => "claude",
+            Agent::Codex => "codex",
+            Agent::Gemini => "gemini",
+        }
+    }
+
+    /// Its shell tool.
+    fn is_shell(self, tool: &str) -> bool {
+        match self {
+            Agent::Claude | Agent::Codex => tool == "Bash",
+            Agent::Gemini => tool == "run_shell_command",
+        }
+    }
+
+    /// The hook events to register, as (event, tool matcher).
+    fn events(self) -> &'static [(&'static str, bool)] {
+        match self {
+            Agent::Claude => &[
+                ("PreToolUse", true),
+                ("PostToolUse", true),
+                ("PostToolUseFailure", true),
+                ("UserPromptSubmit", false),
+                ("Notification", false),
+                ("PermissionRequest", false),
+                ("Stop", false),
+                ("SessionStart", false),
+                ("SessionEnd", false),
+            ],
+            Agent::Codex => &[
+                ("PreToolUse", true),
+                ("PostToolUse", true),
+                ("UserPromptSubmit", false),
+                ("PermissionRequest", false),
+                ("Stop", false),
+                ("SessionStart", false),
+                ("SessionEnd", false),
+            ],
+            Agent::Gemini => &[
+                ("BeforeTool", true),
+                ("AfterTool", true),
+                ("BeforeAgent", false),
+                ("AfterAgent", false),
+                ("Notification", false),
+                ("SessionStart", false),
+                ("SessionEnd", false),
+            ],
+        }
+    }
+
+    /// Hook timeout as each agent counts it (Gemini: milliseconds).
+    fn timeout(self) -> u64 {
+        match self {
+            Agent::Gemini => 10_000,
+            _ => 10,
+        }
+    }
+}
+
+/// The `hooks` object (event -> matcher groups) running `hook` -- a shell
+/// command, this binary's `+hook <agent>` -- for every event.
+pub fn hooks_json(agent: Agent, hook: &str) -> Value {
     let mut hooks = serde_json::Map::new();
-    for event in ["PreToolUse", "PostToolUse", "PostToolUseFailure"] {
-        hooks.insert(event.into(), entry(Some("*")));
+    for (event, tools) in agent.events() {
+        let mut group = serde_json::json!({
+            "hooks": [{ "type": "command", "command": hook, "timeout": agent.timeout() }]
+        });
+        if *tools {
+            group["matcher"] = Value::String("*".into());
+        }
+        hooks.insert(event.to_string(), Value::Array(vec![group]));
     }
-    for event in [
-        "UserPromptSubmit",
-        "Notification",
-        "PermissionRequest",
-        "Stop",
-        "SessionStart",
-        "SessionEnd",
-    ] {
-        hooks.insert(event.into(), entry(None));
-    }
-    serde_json::json!({ "hooks": hooks }).to_string()
+    Value::Object(hooks)
+}
+
+/// Claude Code's `--settings` JSON.
+pub fn claude_settings(hook: &str) -> String {
+    serde_json::json!({ "hooks": hooks_json(Agent::Claude, hook) }).to_string()
+}
+
+/// Codex's `-c key=value` overrides (TOML values), one per event.
+pub fn codex_overrides(hook: &str) -> Vec<String> {
+    let quote = |s: &str| {
+        let mut out = String::from("\"");
+        for c in s.chars() {
+            match c {
+                '"' => out.push_str("\\\""),
+                '\\' => out.push_str("\\\\"),
+                c => out.push(c),
+            }
+        }
+        out.push('"');
+        out
+    };
+    Agent::Codex
+        .events()
+        .iter()
+        .map(|(event, tools)| {
+            let matcher = if *tools { "matcher=\"*\"," } else { "" };
+            format!(
+                "hooks.{event}=[{{{matcher}hooks=[{{type=\"command\",command={},timeout={}}}]}}]",
+                quote(hook),
+                Agent::Codex.timeout()
+            )
+        })
+        .collect()
 }
 
 fn s<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get(key).and_then(Value::as_str)
 }
 
-/// Tools that change files, and where their path is.
-fn edited_path(tool: &str, input: &Value) -> Option<String> {
-    match tool {
-        "Edit" | "MultiEdit" | "Write" => s(input, "file_path").map(str::to_string),
-        "NotebookEdit" => s(input, "notebook_path").map(str::to_string),
-        _ => None,
+/// Files a tool call changed.
+fn edited_paths(agent: Agent, tool: &str, input: &Value) -> Vec<String> {
+    let one = |k: &str| s(input, k).map(|p| vec![p.to_string()]).unwrap_or_default();
+    match (agent, tool) {
+        (_, "Edit" | "MultiEdit" | "Write") => one("file_path"),
+        (_, "NotebookEdit") => one("notebook_path"),
+        (Agent::Codex, "apply_patch") => {
+            // V4A patches: "*** Update File: path", "*** Add File: ...",
+            // "*** Delete File: ...", "*** Move to: ...".
+            let patch = s(input, "command")
+                .or_else(|| s(input, "input"))
+                .or_else(|| s(input, "patch"))
+                .unwrap_or_default();
+            let mut paths: Vec<String> = Vec::new();
+            for line in patch.lines() {
+                let line = line.trim();
+                for prefix in [
+                    "*** Update File: ",
+                    "*** Add File: ",
+                    "*** Delete File: ",
+                    "*** Move to: ",
+                ] {
+                    if let Some(p) = line.strip_prefix(prefix) {
+                        if !paths.iter().any(|q| q == p.trim()) {
+                            paths.push(p.trim().to_string());
+                        }
+                    }
+                }
+            }
+            paths
+        }
+        (Agent::Gemini, "replace" | "write_file") => one("file_path"),
+        _ => Vec::new(),
     }
 }
 
@@ -229,7 +368,9 @@ fn edited_path(tool: &str, input: &Value) -> Option<String> {
 fn tool_summary(input: &Value) -> Option<String> {
     [
         "file_path",
+        "absolute_path",
         "path",
+        "dir_path",
         "pattern",
         "url",
         "query",
@@ -241,27 +382,107 @@ fn tool_summary(input: &Value) -> Option<String> {
     .map(|t| clip(t.lines().next().unwrap_or(t), 200))
 }
 
-/// The text a tool returned (Claude's shapes vary by tool).
+/// The text a tool returned. Shapes vary: a string (Codex), stdout and
+/// stderr (Claude), or `llmContent` (Gemini, as a string or parts).
 fn response_text(r: &Value) -> Option<String> {
     let text = match r {
         Value::String(t) => t.clone(),
         Value::Object(_) => {
-            let out = s(r, "stdout").unwrap_or_default();
-            let err = s(r, "stderr").unwrap_or_default();
-            match (out.is_empty(), err.is_empty()) {
-                (false, false) => format!("{out}\n{err}"),
-                (false, true) => out.to_string(),
-                (true, false) => err.to_string(),
-                (true, true) => return None,
+            if let Some(content) = r.get("llmContent") {
+                match content {
+                    Value::String(t) => t.clone(),
+                    Value::Array(parts) => parts
+                        .iter()
+                        .filter_map(|p| s(p, "text").or_else(|| p.as_str()))
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    _ => return None,
+                }
+            } else {
+                let out = s(r, "stdout")
+                    .or_else(|| s(r, "output"))
+                    .unwrap_or_default();
+                let err = s(r, "stderr").unwrap_or_default();
+                match (out.is_empty(), err.is_empty()) {
+                    (false, false) => format!("{out}\n{err}"),
+                    (false, true) => out.to_string(),
+                    (true, false) => err.to_string(),
+                    (true, true) => return None,
+                }
             }
         }
         _ => return None,
     };
-    Some(clip(text.trim_end(), MAX_TEXT)).filter(|t| !t.is_empty())
+    // Gemini fences tool output as untrusted.
+    let text = text
+        .trim()
+        .strip_prefix("<untrusted_context>")
+        .and_then(|t| t.strip_suffix("</untrusted_context>"))
+        .map(str::trim)
+        .unwrap_or(text.trim())
+        .to_string();
+    Some(text).filter(|t| !t.is_empty())
 }
 
-/// Events from one Claude Code hook call.
-pub fn from_claude(v: &Value) -> Vec<Event> {
+/// What a shell tool's output says about how the command went: exit code
+/// and duration where the agent writes them, and the output proper.
+///
+/// - Codex: "Exit code: 1\nWall time: 0.4 seconds\nOutput:\n..."
+/// - Gemini: "Output: ...\nExit Code: 1" (the exit code only when it isn't
+///   0, so no "Exit Code" with an "Output:" section means 0)
+fn shell_result(agent: Agent, text: &str) -> (Option<i32>, Option<u64>, String) {
+    let field = |name: &str| {
+        text.lines()
+            .find_map(|l| l.trim().strip_prefix(name).map(|v| v.trim().to_string()))
+    };
+    match agent {
+        Agent::Codex => {
+            let exit = field("Exit code:").and_then(|v| v.parse().ok());
+            let duration = field("Wall time:")
+                .and_then(|v| v.split_whitespace().next()?.parse::<f64>().ok())
+                .map(|secs| (secs * 1000.0) as u64);
+            let output = match text.find("Output:\n") {
+                Some(i) => text[i + 8..].to_string(),
+                None => text.to_string(),
+            };
+            (exit, duration, output)
+        }
+        Agent::Gemini => {
+            let exit = field("Exit Code:").and_then(|v| v.parse().ok());
+            let has_output = text.lines().any(|l| l.starts_with("Output:"));
+            let exit = exit.or((has_output && field("Error:").is_none()).then_some(0));
+            // The output section runs until the next "Name: " field.
+            let output = match text.find("Output: ") {
+                Some(i) => {
+                    let rest = &text[i + 8..];
+                    let end = [
+                        "\nError: ",
+                        "\nExit Code: ",
+                        "\nSignal: ",
+                        "\nBackground PIDs: ",
+                        "\nProcess Group PGID: ",
+                    ]
+                    .iter()
+                    .filter_map(|m| rest.find(m))
+                    .min()
+                    .unwrap_or(rest.len());
+                    rest[..end].to_string()
+                }
+                None => text.to_string(),
+            };
+            let output = if output.trim() == "(empty)" {
+                String::new()
+            } else {
+                output
+            };
+            (exit, None, output)
+        }
+        Agent::Claude => (None, None, text.to_string()),
+    }
+}
+
+/// Events from one hook call of `agent`.
+pub fn from_hook(agent: Agent, v: &Value) -> Vec<Event> {
     let name = s(v, "hook_event_name").unwrap_or_default();
     let tool = s(v, "tool_name").unwrap_or_default();
     let input = v.get("tool_input").cloned().unwrap_or(Value::Null);
@@ -269,14 +490,22 @@ pub fn from_claude(v: &Value) -> Vec<Event> {
     let cwd = s(v, "cwd").map(str::to_string);
     let ev = |kind: &str| Event {
         cwd: cwd.clone(),
-        ..Event::new(kind, "claude")
+        ..Event::new(kind, agent.name())
+    };
+    // Gemini's names, as Claude/Codex ones.
+    let name = match name {
+        "BeforeTool" => "PreToolUse",
+        "AfterTool" => "PostToolUse",
+        "BeforeAgent" => "UserPromptSubmit",
+        "AfterAgent" => "Stop",
+        n => n,
     };
     match name {
         "UserPromptSubmit" => vec![Event {
             text: s(v, "prompt").map(|p| clip(p, MAX_TEXT)),
             ..ev("prompt")
         }],
-        "PreToolUse" if tool == "Bash" => vec![Event {
+        "PreToolUse" if agent.is_shell(tool) => vec![Event {
             id,
             command: s(&input, "command").map(|c| clip(c, MAX_TEXT)),
             tool: Some(tool.into()),
@@ -284,29 +513,43 @@ pub fn from_claude(v: &Value) -> Vec<Event> {
             ..ev("command_start")
         }],
         "PostToolUse" | "PostToolUseFailure" => {
-            let failed = name == "PostToolUseFailure";
-            if tool == "Bash" {
-                let output = v
+            let mut failed = name == "PostToolUseFailure";
+            if agent.is_shell(tool) {
+                let text = v
                     .get("tool_response")
                     .and_then(response_text)
-                    .or_else(|| s(v, "error").map(|e| clip(e, MAX_TEXT)));
+                    .or_else(|| s(v, "error").map(str::to_string))
+                    .unwrap_or_default();
+                let (exit, duration_ms, output) = shell_result(agent, &text);
+                if v.get("tool_response")
+                    .and_then(|r| r.get("error"))
+                    .is_some_and(|e| !e.is_null())
+                {
+                    failed = true;
+                }
                 return vec![Event {
                     id,
                     command: s(&input, "command").map(|c| clip(c, MAX_TEXT)),
                     tool: Some(tool.into()),
-                    output,
+                    output: Some(clip(output.trim_end(), MAX_TEXT)).filter(|o| !o.is_empty()),
+                    exit,
+                    duration_ms,
                     failed,
                     ..ev("command")
                 }];
             }
-            if let Some(path) = edited_path(tool, &input) {
-                return vec![Event {
-                    id,
-                    path: Some(path),
-                    tool: Some(tool.into()),
-                    failed,
-                    ..ev("edit")
-                }];
+            let paths = edited_paths(agent, tool, &input);
+            if !paths.is_empty() {
+                return paths
+                    .into_iter()
+                    .map(|path| Event {
+                        id: id.clone(),
+                        path: Some(path),
+                        tool: Some(tool.into()),
+                        failed,
+                        ..ev("edit")
+                    })
+                    .collect();
             }
             vec![Event {
                 id,
@@ -319,6 +562,7 @@ pub fn from_claude(v: &Value) -> Vec<Event> {
         "Notification" | "PermissionRequest" => vec![Event {
             text: s(v, "message")
                 .map(str::to_string)
+                .or_else(|| s(&input, "description").map(str::to_string))
                 .or_else(|| (!tool.is_empty()).then(|| format!("permission to use {tool}"))),
             ..ev("waiting")
         }],
@@ -335,10 +579,18 @@ pub fn from_claude(v: &Value) -> Vec<Event> {
     }
 }
 
-/// `cyberterm +hook <claude|event> [--session <id>]`: reads hook input on
-/// stdin and appends to the session's flight log. It never fails the
-/// caller (always exits 0, prints nothing) -- an agent must not stop
-/// because its log couldn't be written.
+/// Claude Code's hook calls.
+#[cfg(test)]
+pub fn from_claude(v: &Value) -> Vec<Event> {
+    from_hook(Agent::Claude, v)
+}
+
+/// `cyberterm +hook <claude|codex|gemini|event> [--session <id>]`: reads
+/// hook input on stdin and appends to the session's flight log. It never
+/// fails the caller (always exits 0, prints nothing) -- an agent must not
+/// stop because its log couldn't be written -- and outside Cyberterm's
+/// agent sessions it does nothing (hooks installed with `+agent setup`
+/// run for every session of that agent).
 pub fn run_hook(args: &[String]) {
     let mut kind = "event";
     let mut session = std::env::var("CYBERTERM_AGENT_ID").ok();
@@ -346,21 +598,25 @@ pub fn run_hook(args: &[String]) {
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--session" => session = iter.next().cloned(),
-            "claude" | "event" => kind = if a == "claude" { "claude" } else { "event" },
+            "claude" => kind = "claude",
+            "codex" => kind = "codex",
+            "gemini" => kind = "gemini",
+            "event" => kind = "event",
             _ => {}
         }
     }
+    // Read everything first, so the agent never writes into a closed pipe.
+    let mut input = String::new();
+    let _ = std::io::stdin().take(MAX_INPUT).read_to_string(&mut input);
     let Some(session) = session.filter(|s| crate::agent::load(s).is_ok()) else {
         return;
     };
-    let mut input = String::new();
-    let _ = std::io::stdin().take(MAX_INPUT).read_to_string(&mut input);
-    let events: Vec<Event> = match kind {
-        "claude" => serde_json::from_str(&input)
-            .map(|v| from_claude(&v))
+    let events: Vec<Event> = match Agent::parse(kind) {
+        Some(agent) => serde_json::from_str(&input)
+            .map(|v| from_hook(agent, &v))
             .unwrap_or_default(),
         // One event or several, as a JSON value per line.
-        _ => input
+        None => input
             .lines()
             .filter(|l| !l.trim().is_empty())
             .filter_map(|l| serde_json::from_str::<Value>(l).ok())
@@ -574,6 +830,14 @@ pub fn unwrap_command(raw: &str) -> String {
     }
 }
 
+/// A shell running one of Cyberterm's own hooks (agents run hook commands
+/// through a shell, so the recorder sees them).
+fn is_hook_call(command: &str) -> bool {
+    let words = crate::agent::split_command(command).unwrap_or_default();
+    words.first().is_some_and(|p| p.ends_with("cyberterm"))
+        && words.get(1).map(String::as_str) == Some("+hook")
+}
+
 fn same_command(a: &str, b: &str) -> bool {
     let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
     norm(a) == norm(b)
@@ -586,10 +850,10 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
     // for the shell's exit code (index into `out`).
     let mut by_id: std::collections::HashMap<String, usize> = Default::default();
     let mut agent_cmds: Vec<usize> = Vec::new();
-    // With Claude Code's hooks on, its own reports are the list of what it
+    // With an agent's hooks on, its own reports are the list of what it
     // ran; shell commands that match none of them are its internals (the
-    // shell snapshot it takes at start), so they're left out.
-    let agent_reports_commands = events.iter().any(|e| e.source == "claude");
+    // shell snapshot Claude Code takes at start), so they're left out.
+    let agent_reports_commands = events.iter().any(|e| Agent::parse(&e.source).is_some());
 
     for e in events {
         match e.kind.as_str() {
@@ -603,17 +867,27 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
                 if e.source == "shell" {
                     command = unwrap_command(&command);
                 }
-                // The same command already on the timeline: by id, or
-                // (shell recorder vs. agent hook) by its text.
+                // The same command already on the timeline: by id, or by
+                // its text -- the shell recorder's report of an agent's
+                // command, or the end of one whose agent gives no ids
+                // (Gemini).
                 let existing =
                     e.id.as_ref()
                         .and_then(|id| by_id.get(id).copied())
                         .or_else(|| {
                             let from_shell = e.source == "shell";
+                            let unpaired_end = !from_shell && finished && e.id.is_none();
                             agent_cmds.iter().rev().copied().find(|&i| match &out[i] {
                                 Entry::Command {
-                                    command: c, exit, ..
-                                } => from_shell && exit.is_none() && same_command(c, &command),
+                                    command: c,
+                                    exit,
+                                    running,
+                                    ..
+                                } => {
+                                    same_command(c, &command)
+                                        && ((from_shell && exit.is_none())
+                                            || (unpaired_end && *running))
+                                }
                                 _ => false,
                             })
                         });
@@ -646,7 +920,9 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
                     }
                     continue;
                 }
-                if command.trim().is_empty() || (e.source == "shell" && agent_reports_commands) {
+                if command.trim().is_empty()
+                    || (e.source == "shell" && (agent_reports_commands || is_hook_call(&command)))
+                {
                     continue;
                 }
                 out.push(Entry::Command {
@@ -922,6 +1198,143 @@ mod tests {
         let prompt = json!({"hook_event_name": "UserPromptSubmit", "prompt": "fix it"});
         assert_eq!(from_claude(&prompt)[0].text.as_deref(), Some("fix it"));
         assert!(from_claude(&json!({"hook_event_name": "Mystery"})).is_empty());
+    }
+
+    #[test]
+    fn codex_hooks_become_events() {
+        let patch = "*** Begin Patch\n*** Update File: src/a.rs\n@@\n-x\n+y\n*** Add File: src/new.rs\n+fn n() {}\n*** End Patch";
+        let edit = json!({
+            "hook_event_name": "PostToolUse", "tool_name": "apply_patch", "tool_use_id": "c1",
+            "tool_input": {"command": patch}, "tool_response": "Success"
+        });
+        let paths: Vec<String> = from_hook(Agent::Codex, &edit)
+            .into_iter()
+            .filter_map(|e| e.path)
+            .collect();
+        assert_eq!(paths, vec!["src/a.rs", "src/new.rs"]);
+
+        let run = json!({
+            "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "c2",
+            "tool_input": {"command": "cargo test"},
+            "tool_response": "Exit code: 101\nWall time: 5.3 seconds\nOutput:\ntest result: FAILED"
+        });
+        let e = &from_hook(Agent::Codex, &run)[0];
+        assert_eq!(
+            (e.source.as_str(), e.exit, e.duration_ms),
+            ("codex", Some(101), Some(5300))
+        );
+        assert_eq!(e.output.as_deref(), Some("test result: FAILED"));
+
+        let ask = json!({"hook_event_name": "PermissionRequest", "tool_name": "Bash",
+                         "tool_input": {"command": "rm -rf build", "description": "clean the build"}});
+        let e = &from_hook(Agent::Codex, &ask)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.text.as_deref()),
+            ("waiting", Some("clean the build"))
+        );
+        assert_eq!(
+            from_hook(
+                Agent::Codex,
+                &json!({"hook_event_name": "Stop", "last_assistant_message": "done"})
+            )[0]
+            .kind,
+            "done"
+        );
+    }
+
+    #[test]
+    fn codex_overrides_are_valid_toml_hooks() {
+        let hook = "/opt/my \"apps\"/cyberterm +hook codex";
+        for o in codex_overrides(hook) {
+            let (key, value) = o.split_once('=').unwrap();
+            let doc: toml::Value =
+                toml::from_str(&format!("v = {value}")).unwrap_or_else(|e| panic!("{o}: {e}"));
+            let group = &doc["v"][0];
+            assert_eq!(group["hooks"][0]["command"].as_str(), Some(hook), "{o}");
+            assert_eq!(group["hooks"][0]["type"].as_str(), Some("command"));
+            let tools = key.ends_with("ToolUse");
+            assert_eq!(group.get("matcher").is_some(), tools, "{o}");
+        }
+    }
+
+    #[test]
+    fn gemini_hooks_become_events() {
+        let before = json!({"hook_event_name": "BeforeTool", "tool_name": "run_shell_command",
+                            "tool_input": {"command": "npm test", "description": "Run tests"}});
+        let e = &from_hook(Agent::Gemini, &before)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.command.as_deref(), e.id.as_deref()),
+            ("command_start", Some("npm test"), None)
+        );
+
+        // A command that passed: no "Exit Code" line means 0.
+        let ok = json!({"hook_event_name": "AfterTool", "tool_name": "run_shell_command",
+                        "tool_input": {"command": "npm test"},
+                        "tool_response": {"llmContent": "<untrusted_context> Output: 12 passing\nProcess Group PGID: 4242 </untrusted_context>", "returnDisplay": "12 passing"}});
+        let e = &from_hook(Agent::Gemini, &ok)[0];
+        assert_eq!((e.exit, e.output.as_deref()), (Some(0), Some("12 passing")));
+
+        let failed = json!({"hook_event_name": "AfterTool", "tool_name": "run_shell_command",
+                            "tool_input": {"command": "npm test"},
+                            "tool_response": {"llmContent": "Output: 1 failing\nExit Code: 1", "error": null}});
+        assert_eq!(from_hook(Agent::Gemini, &failed)[0].exit, Some(1));
+
+        let edit = json!({"hook_event_name": "AfterTool", "tool_name": "replace",
+                          "tool_input": {"file_path": "/w/app.py", "old_string": "a", "new_string": "b"}});
+        assert_eq!(
+            from_hook(Agent::Gemini, &edit)[0].path.as_deref(),
+            Some("/w/app.py")
+        );
+        let read = json!({"hook_event_name": "AfterTool", "tool_name": "read_file", "tool_input": {"absolute_path": "/w/README.md"}});
+        assert_eq!(
+            from_hook(Agent::Gemini, &read)[0].text.as_deref(),
+            Some("/w/README.md")
+        );
+
+        let prompt = json!({"hook_event_name": "BeforeAgent", "prompt": "fix it"});
+        assert_eq!(from_hook(Agent::Gemini, &prompt)[0].kind, "prompt");
+        let done = json!({"hook_event_name": "AfterAgent", "prompt": "fix it", "prompt_response": "Fixed."});
+        assert_eq!(from_hook(Agent::Gemini, &done)[0].kind, "done");
+        let note = json!({"hook_event_name": "Notification", "notification_type": "ToolPermission", "message": "Allow npm test?"});
+        assert_eq!(
+            from_hook(Agent::Gemini, &note)[0].text.as_deref(),
+            Some("Allow npm test?")
+        );
+    }
+
+    #[test]
+    fn hook_calls_are_not_commands() {
+        assert!(is_hook_call("/usr/bin/cyberterm +hook gemini"));
+        assert!(is_hook_call("'/a b/cyberterm' +hook codex"));
+        assert!(!is_hook_call("cyberterm +agent list"));
+        assert!(!is_hook_call("git commit -m '+hook'"));
+        let shell = ev("command", "shell", |e| {
+            e.command = Some("cyberterm +hook event".into());
+            e.exit = Some(0);
+        });
+        assert!(timeline(&[shell]).is_empty());
+    }
+
+    #[test]
+    fn gemini_commands_pair_without_ids() {
+        let start = from_hook(
+            Agent::Gemini,
+            &json!({"hook_event_name": "BeforeTool", "tool_name": "run_shell_command", "tool_input": {"command": "make"}}),
+        );
+        let end = from_hook(
+            Agent::Gemini,
+            &json!({"hook_event_name": "AfterTool", "tool_name": "run_shell_command", "tool_input": {"command": "make"}, "tool_response": {"llmContent": "Output: done"}}),
+        );
+        let t = timeline(&[start, end].concat());
+        assert_eq!(t.len(), 1, "{t:#?}");
+        assert!(matches!(
+            &t[0],
+            Entry::Command {
+                exit: Some(0),
+                running: false,
+                ..
+            }
+        ));
     }
 
     #[test]

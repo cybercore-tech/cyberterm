@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Codex and Gemini CLI report to the flight log** like Claude Code does: prompts, command output and exit codes, edits, other tools, and when they need you or are done.
+  - **Codex:** hooks per session; you approve them once in Codex.
+  - **Gemini:** `cyberterm +agent setup gemini` installs them; they're inert outside Cyberterm.
+- **`cyberterm +agent setup`** shows what each agent reports and installs the opt-in hooks; `--remove` takes them out.
+
+### Fixed
+- `+agent rm` left the session's flight log behind.
+- The shell recorder logged agents running Cyberterm's own hooks as commands.
+
 ## 0.3.0 — 2026-10-10
 
 **The agent workspace:** run any coding agent in its own worktree, see what it does as it works, and review what it changed.
