@@ -210,7 +210,16 @@ impl TermRenderer {
         let swash_cache = SwashCache::new();
         let cache = Cache::new(device);
         let viewport = Viewport::new(device, &cache);
-        let mut atlas = TextAtlas::new(device, queue, &cache, format);
+        // The surface isn't sRGB (see `init_gpu`): colors are written as the
+        // encoded values they are. glyphon's default (Accurate) mode would
+        // linearize text colors for an sRGB target and, with no re-encode
+        // here, draw every mid-tone too dark (#666b83 came out #22253a).
+        let color_mode = if format.is_srgb() {
+            glyphon::ColorMode::Accurate
+        } else {
+            glyphon::ColorMode::Web
+        };
+        let mut atlas = TextAtlas::with_color_mode(device, queue, &cache, format, color_mode);
         let text_renderer =
             TextRenderer::new(&mut atlas, device, wgpu::MultisampleState::default(), None);
 
