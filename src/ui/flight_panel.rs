@@ -197,7 +197,7 @@ pub fn build(v: &View<'_>, cols: usize, rows: usize, c: &Colors) -> Frame {
     put_line(&mut f, 4, &[("─".repeat(cols), c.dim)], c.bg);
 
     let footer = if v.focused {
-        " ↑↓ select · Enter output · y copy · Esc back".to_string()
+        " ↑↓ Enter output · y copy · c changes · Esc back".to_string()
     } else {
         format!(" {} focus · again to close", v.key)
     };

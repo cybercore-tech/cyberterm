@@ -54,6 +54,9 @@ impl App {
             self.history_key(&event);
             return;
         }
+        if self.changes_open() && self.changes_key(&event) {
+            return;
+        }
         if self.flight.focused && self.flight_key(&event) {
             return;
         }
@@ -211,6 +214,14 @@ impl App {
             Action::Rewind => self.toggle_rewind(),
             Action::CommandPalette => self.toggle_command_palette(),
             Action::FlightLog => self.toggle_flight_log(),
+            Action::AgentChanges => {
+                if self.changes_open() {
+                    self.changes_ui = None;
+                    self.request_redraw();
+                } else {
+                    self.open_changes();
+                }
+            }
         }
         self.request_redraw();
     }

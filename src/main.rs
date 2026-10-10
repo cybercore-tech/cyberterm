@@ -6,6 +6,7 @@ mod ai;
 mod app;
 mod blocks;
 mod boxdraw;
+mod changes;
 mod cli;
 mod clipboard;
 mod config;
