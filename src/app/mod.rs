@@ -48,6 +48,7 @@ mod blocks;
 mod control;
 mod daemon;
 mod danger;
+mod graphics;
 pub use daemon::AttachTarget;
 mod input;
 mod overlays;
@@ -165,6 +166,8 @@ struct ContextMenu {
 struct DrawList {
     panes: Vec<(Rect, Frame, f32, f32)>,
     overlays: Vec<Overlay>,
+    /// Inline image strips, drawn over the panes' text.
+    images: Vec<crate::renderer_images::ImageDraw>,
     /// Index in `panes` of the focused pane.
     focused: Option<usize>,
 }
@@ -840,6 +843,8 @@ impl App {
                     self.draw_find(&mut frame);
                 }
             }
+            let cell = gpu.renderer.cell_size();
+            self.collect_images(pane, &mut frame, rect, cell, &mut list.images);
             let mut used = self.draw_danger_badge(pane, &mut frame);
             used += self.draw_agent_badge(pane.id, &mut frame, used);
             self.draw_port_chips(pane, &mut frame, used);
@@ -981,6 +986,7 @@ impl App {
             },
             &views,
             &list.overlays,
+            &list.images,
         );
         gpu.queue.submit(std::iter::once(encoder.finish()));
         gpu.window.pre_present_notify();

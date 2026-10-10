@@ -344,6 +344,13 @@ Each pane keeps its last 2 MiB of output (`[rewind] buffer_kb`), daemon panes in
 
 Recording costs about a quarter of raw throughput when a single command dumps tens of megabytes. `[rewind] enabled = false` turns it off.
 
+### Inline images
+
+Cyberterm speaks the kitty graphics protocol, so `kitten icat`, timg, chafa, viu, yazi, ranger previews and matplotlib's kitty backend can show images in the terminal.
+- **How placement works:** each image row is anchored in the grid, so images scroll with the text, stay in the scrollback, show up in rewind and work in daemon panes.
+- **Supported:** PNG/RGB/RGBA, zlib compression, chunked transfers, and data sent directly or through files (including `/dev/shm`). Placement, query and delete are supported too.
+- **Not supported yet:** shared-memory transfer, animation and z-index; images are drawn over text.
+
 ### Live ports
 
 Start a dev server (`npm run dev`, `cargo run`, `python -m http.server`) and a `:3000` chip appears in the pane's corner within a second. Click it, or right-click → **Open localhost:3000**, to open it in your browser.

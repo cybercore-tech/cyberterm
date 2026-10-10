@@ -37,6 +37,10 @@ pub struct Replica {
     info: PaneInfo,
     parser: Processor<StdSyncHandler>,
     rewind: Arc<Mutex<crate::rewind::Recorder>>,
+    /// Inline images (kitty graphics) the pane's programs sent; the
+    /// daemon passes the protocol through and the window decodes it.
+    images: Arc<Mutex<crate::graphics::Images>>,
+    graphics: crate::graphics::GraphicsTap,
 }
 
 type Replicas = Arc<Mutex<HashMap<PaneId, Replica>>>;
@@ -48,10 +52,11 @@ pub type ReplicaHandle = (
     Arc<Mutex<ShellState>>,
     u32,
     Arc<Mutex<crate::rewind::Recorder>>,
+    Arc<Mutex<crate::graphics::Images>>,
 );
 
 pub struct DaemonClient {
-    writer: Mutex<UnixStream>,
+    writer: Arc<Mutex<UnixStream>>,
     next_req: AtomicU64,
     pending: Arc<Mutex<HashMap<u64, Sender<ServerMsg>>>>,
     /// Where `SessionReady` / `Error` go while an attach is waiting.
@@ -106,20 +111,21 @@ impl DaemonClient {
     fn start(stream: UnixStream, sink: Option<EventSink>) -> io::Result<Arc<Self>> {
         let read_half = stream.try_clone()?;
         let client = Arc::new(Self {
-            writer: Mutex::new(stream),
+            writer: Arc::new(Mutex::new(stream)),
             next_req: AtomicU64::new(1),
             pending: Arc::new(Mutex::new(HashMap::new())),
             ready: Arc::new(Mutex::new(None)),
             replicas: Arc::new(Mutex::new(HashMap::new())),
         });
-        let (pending, ready, replicas) = (
+        let (pending, ready, replicas, writer) = (
             client.pending.clone(),
             client.ready.clone(),
             client.replicas.clone(),
+            client.writer.clone(),
         );
         std::thread::Builder::new()
             .name("daemon reader".into())
-            .spawn(move || read_loop(read_half, sink, pending, ready, replicas))?;
+            .spawn(move || read_loop(read_half, sink, pending, ready, replicas, writer))?;
         client.send(&ClientMsg::Hello {
             version: VERSION.into(),
         })?;
@@ -215,10 +221,15 @@ impl DaemonClient {
 
     /// The replica terminal and shell state of a pane the daemon reported.
     pub fn replica(&self, pane: PaneId) -> Option<ReplicaHandle> {
-        self.replicas
-            .lock()
-            .get(&pane)
-            .map(|r| (r.term.clone(), r.shell.clone(), r.pid, r.rewind.clone()))
+        self.replicas.lock().get(&pane).map(|r| {
+            (
+                r.term.clone(),
+                r.shell.clone(),
+                r.pid,
+                r.rewind.clone(),
+                r.images.clone(),
+            )
+        })
     }
 
     pub fn forget(&self, pane: PaneId) {
@@ -251,8 +262,15 @@ fn start_daemon() -> io::Result<()> {
     Ok(())
 }
 
-fn new_replica(info: &PaneInfo, sink: &EventSink) -> Replica {
+fn new_replica(info: &PaneInfo, sink: &EventSink, writer: &Arc<Mutex<UnixStream>>) -> Replica {
     let config = super::term_config(&info.settings);
+    let images = Arc::new(Mutex::new(crate::graphics::Images::default()));
+    // Graphics replies go back to the program as input.
+    let (pane, writer) = (info.id, writer.clone());
+    let respond: crate::graphics::Responder = Box::new(move |bytes: &[u8]| {
+        let mut w = writer.lock();
+        let _ = Frame::Input(pane, bytes.to_vec()).write_to(&mut *w);
+    });
     let listener = EventProxy::new(info.id, sink.clone());
     Replica {
         term: Arc::new(FairMutex::new(Term::new(
@@ -265,6 +283,8 @@ fn new_replica(info: &PaneInfo, sink: &EventSink) -> Replica {
         info: info.clone(),
         parser: Processor::new(),
         rewind: Arc::new(Mutex::new(crate::rewind::Recorder::new(grid(info.size)))),
+        graphics: crate::graphics::GraphicsTap::new(Some(images.clone()), false, Some(respond)),
+        images,
     }
 }
 
@@ -274,6 +294,7 @@ fn read_loop(
     pending: Arc<Mutex<HashMap<u64, Sender<ServerMsg>>>>,
     ready: Arc<Mutex<Option<Sender<ServerMsg>>>>,
     replicas: Replicas,
+    writer: Arc<Mutex<UnixStream>>,
 ) {
     let mut reader = BufReader::new(stream);
     let wake = |pane: PaneId, event: TermEvent| {
@@ -285,9 +306,11 @@ fn read_loop(
         match frame {
             Frame::Output(pane, bytes) => {
                 if let Some(r) = replicas.lock().get_mut(&pane) {
+                    let mut shown = Vec::with_capacity(bytes.len());
+                    r.graphics.feed(&bytes, &mut shown);
                     let mut term = r.term.lock();
-                    r.parser.advance(&mut *term, &bytes);
-                    r.rewind.lock().feed(&bytes);
+                    r.parser.advance(&mut *term, &shown);
+                    r.rewind.lock().feed(&shown);
                 }
                 wake(pane, TermEvent::Wakeup);
             }
@@ -313,13 +336,15 @@ fn read_loop(
                         if let Some(sink) = &sink {
                             let mut map = replicas.lock();
                             for info in panes {
-                                map.insert(info.id, new_replica(info, sink));
+                                map.insert(info.id, new_replica(info, sink, &writer));
                             }
                         }
                     }
                     ServerMsg::Spawned { pane, .. } => {
                         if let Some(sink) = &sink {
-                            replicas.lock().insert(pane.id, new_replica(pane, sink));
+                            replicas
+                                .lock()
+                                .insert(pane.id, new_replica(pane, sink, &writer));
                         }
                     }
                     ServerMsg::ShellState { pane, shell } => {

@@ -196,6 +196,7 @@ pub struct TermRenderer {
     overlay_pipeline: wgpu::RenderPipeline,
     quad_uniform_buffer: wgpu::Buffer,
     quad_bind_group: wgpu::BindGroup,
+    images: crate::renderer_images::ImagePainter,
 }
 
 impl TermRenderer {
@@ -264,6 +265,8 @@ impl TermRenderer {
             "overlay",
         );
 
+        let images = crate::renderer_images::ImagePainter::new(device, format, &bind_group_layout);
+
         Self {
             font_system,
             swash_cache,
@@ -282,6 +285,7 @@ impl TermRenderer {
             overlay_pipeline,
             quad_uniform_buffer,
             quad_bind_group,
+            images,
         }
     }
 
@@ -324,6 +328,7 @@ impl TermRenderer {
         target: FrameTarget<'_>,
         panes: &[PaneView<'_>],
         overlays: &[Overlay],
+        images: &[crate::renderer_images::ImageDraw],
     ) {
         let FrameTarget {
             view,
@@ -462,6 +467,7 @@ impl TermRenderer {
             eprintln!("cyberterm: text prepare failed: {e:?}");
         }
 
+        let image_buf = self.images.prepare(device, queue, images);
         let bg_buf = bg.upload(device, "cyberterm bg quads");
         let overlay_buf = overlay.upload(device, "cyberterm overlay quads");
         {
@@ -492,6 +498,12 @@ impl TermRenderer {
                 .render(&self.atlas, &self.viewport, &mut pass)
             {
                 eprintln!("cyberterm: text render failed: {e:?}");
+            }
+
+            // Images over text (kitty's default z), under decorations.
+            if let Some(buf) = &image_buf {
+                self.images
+                    .draw(&mut pass, &self.quad_bind_group, buf, images);
             }
 
             if let Some(buf) = &overlay_buf {

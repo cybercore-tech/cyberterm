@@ -363,8 +363,41 @@ impl TappedPty {
                 pending: Vec::new(),
                 pos: 0,
                 recorder: None,
+                graphics: None,
+                stage: Vec::new(),
             },
         })
+    }
+
+    /// Also decodes inline images (kitty graphics protocol), answering the
+    /// program through the PTY.
+    pub fn with_graphics(
+        mut self,
+        images: Arc<Mutex<crate::graphics::Images>>,
+    ) -> io::Result<Self> {
+        use std::io::Write as _;
+        let mut pty = self.inner.file().try_clone()?;
+        let respond: crate::graphics::Responder = Box::new(move |bytes: &[u8]| {
+            let _ = pty.write_all(bytes);
+        });
+        self.reader.graphics = Some(crate::graphics::GraphicsTap::new(
+            Some(images),
+            true,
+            Some(respond),
+        ));
+        Ok(self)
+    }
+
+    /// Only the DA1 answer (the daemon: its panes' images are decoded by
+    /// the windows, but DA1 must be answered once, where the PTY is).
+    pub fn with_da1_answer(mut self) -> io::Result<Self> {
+        use std::io::Write as _;
+        let mut pty = self.inner.file().try_clone()?;
+        let respond: crate::graphics::Responder = Box::new(move |bytes: &[u8]| {
+            let _ = pty.write_all(bytes);
+        });
+        self.reader.graphics = Some(crate::graphics::GraphicsTap::new(None, true, Some(respond)));
+        Ok(self)
     }
 
     /// Also records everything read (after the tap) for rewind.
@@ -381,6 +414,9 @@ pub struct TapReader {
     pending: Vec<u8>,
     pos: usize,
     recorder: Option<Arc<Mutex<crate::rewind::Recorder>>>,
+    graphics: Option<crate::graphics::GraphicsTap>,
+    /// Between the OSC tap and the graphics tap.
+    stage: Vec<u8>,
 }
 
 impl Read for TapReader {
@@ -392,7 +428,14 @@ impl Read for TapReader {
             }
             self.pending.clear();
             self.pos = 0;
-            self.tap.feed(&self.raw[..n], &mut self.pending);
+            match &mut self.graphics {
+                Some(graphics) => {
+                    self.stage.clear();
+                    self.tap.feed(&self.raw[..n], &mut self.stage);
+                    graphics.feed(&self.stage, &mut self.pending);
+                }
+                None => self.tap.feed(&self.raw[..n], &mut self.pending),
+            }
             if let Some(rec) = &self.recorder {
                 rec.lock().feed(&self.pending);
             }

@@ -390,7 +390,7 @@ pub fn run(target: AttachTarget, config: &CyberConfig) -> io::Result<()> {
 
 impl Client {
     fn adopt(&mut self, id: PaneId, title: String) {
-        if let Some((term, shell, pid, _)) = self.daemon.replica(id) {
+        if let Some((term, shell, pid, _, _)) = self.daemon.replica(id) {
             self.panes.insert(
                 id,
                 PaneState {
@@ -859,7 +859,12 @@ impl Client {
                         }
                         let cell = &line[Column(col)];
                         screen[sy][sx] = OutCell {
-                            ch: cell.c,
+                            // Image markers can't be shown on the host terminal.
+                            ch: if crate::graphics::decode_marker(cell.c).is_some() {
+                                ' '
+                            } else {
+                                cell.c
+                            },
                             extra: cell.zerowidth().filter(|z| !z.is_empty()).map(Box::from),
                             style: Style::of(cell),
                             spacer: cell.flags.intersects(
