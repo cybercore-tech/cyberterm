@@ -69,6 +69,8 @@ impl App {
             "get_text" => self.rpc_get_text(p),
             "send_text" => self.rpc_send_text(p),
             "split" => self.rpc_split(p),
+            "blocks" => self.rpc_blocks(p),
+            "agent_run" => self.rpc_agent_run(p),
             "history" => {
                 let path = crate::history::default_path();
                 let store = crate::history::Store::open(&path)
@@ -278,6 +280,73 @@ impl App {
         pane.session.term.lock().scroll_display(Scroll::Bottom);
         pane.session.write(bytes);
         Ok(json!({ "pane": id }))
+    }
+
+    /// The pane's most recent commands (shell integration), oldest first:
+    /// command, cwd, exit, timing and, with `output: true`, their output
+    /// while it's still in the scrollback.
+    fn rpc_blocks(&self, p: &Value) -> Outcome {
+        let id = self.target_pane(p)?;
+        let limit = opt_u32(p, "limit")?.unwrap_or(10).clamp(1, 100) as usize;
+        let with_output = p.get("output").and_then(Value::as_bool).unwrap_or(false);
+        let pane = self
+            .pane(id)
+            .ok_or_else(|| RpcError::failed("pane vanished"))?;
+        let metas: Vec<_> = {
+            let shell = pane.session.shell.lock();
+            let commands: Vec<_> = shell.blocks.iter().filter(|b| b.is_command()).collect();
+            commands[commands.len().saturating_sub(limit)..]
+                .iter()
+                .map(|b| (*b).clone())
+                .collect()
+        };
+        let term = pane.session.term.lock();
+        Ok(Value::Array(
+            metas
+                .into_iter()
+                .map(|b| {
+                    let output = with_output
+                        .then(|| {
+                            crate::blocks::span_of(&*term, b.mark)
+                                .map(|span| crate::blocks::output_text(&*term, &span))
+                        })
+                        .flatten();
+                    json!({
+                        "command": b.command,
+                        "cwd": b.cwd,
+                        "exit": b.exit,
+                        "started_ms": b.started_ms,
+                        "finished_ms": b.finished_ms,
+                        "duration_ms": b.finished_ms.zip(b.started_ms).map(|(f, s)| f.saturating_sub(s)),
+                        "output": output,
+                    })
+                })
+                .collect(),
+        ))
+    }
+
+    /// Runs a command in a new pane split from the focused one (down by
+    /// default) without taking focus, so whoever's typing keeps typing.
+    /// `since_ms` marks the start, for waiting on the command's block.
+    fn rpc_agent_run(&mut self, p: &Value) -> Outcome {
+        let command = opt_str(p, "command")?
+            .filter(|c| !c.trim().is_empty())
+            .ok_or_else(|| RpcError::invalid_params("`command` is required"))?
+            .to_string();
+        let target = self.target_pane(p)?;
+        let dir = direction(p, Direction::Down)?;
+        let cwd = match opt_str(p, "cwd")? {
+            Some(c) => Some(expand_home(c)),
+            None => self.pane(target).and_then(|pane| pane.session.cwd()),
+        };
+        let since_ms = crate::shell::tap::now_ms();
+        self.focus_pane(target);
+        let id = self
+            .split_with(dir, cwd)
+            .map_err(|e| RpcError::failed(format!("couldn't open a pane: {e}")))?;
+        self.focus_pane(target);
+        self.run_in(id, Some(&command));
+        Ok(json!({ "pane": id, "since_ms": since_ms }))
     }
 
     fn rpc_split(&mut self, p: &Value) -> Outcome {

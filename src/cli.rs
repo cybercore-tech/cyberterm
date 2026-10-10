@@ -311,6 +311,21 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
+        "+mcp" => {
+            if matches!(
+                args.get(2).map(String::as_str),
+                Some("--help" | "-h" | "help")
+            ) {
+                print!("{MCP_HELP}");
+                return CliAction::ExitCleanly;
+            }
+            if let Err(e) = crate::mcp::run() {
+                eprintln!("cyberterm +mcp: {e}");
+                std::process::exit(1);
+            }
+            CliAction::ExitCleanly
+        }
+
         "+history" => {
             run_history(&args[2..]);
             CliAction::ExitCleanly
@@ -411,6 +426,7 @@ pub fn handle_arguments(
             println!("  cyberterm +attach [name]           reattach a daemon session (default: most recent)");
             println!("  cyberterm +sessions                list daemon sessions");
             println!("  cyberterm +history [words] [...]   search saved commands and their output (+history --help)");
+            println!("  cyberterm +mcp                     MCP server for AI agents (+mcp --help to connect one)");
             println!("  cyberterm +kill-session <name>     end a daemon session and its shells");
             println!("  cyberterm +daemon                  run the session daemon (normally started for you)");
             CliAction::ExitCleanly
@@ -632,3 +648,24 @@ fn run_history(args: &[String]) {
         }
     }
 }
+
+const MCP_HELP: &str = "\
+cyberterm +mcp -- let an AI agent work with your terminal (MCP over stdio)
+
+Agents get these tools: list_panes, read_pane, recent_commands,
+search_history, run_command (in a new pane), wait_for_command, send_text.
+Reading a pane asks you the first time; typing and running ask every time
+(Enter allow once, a allow for the pane, Esc deny). See [agents] in the
+config, and ~/.local/state/cyberterm/agents.log for what agents did.
+
+Connect an agent:
+
+  Claude Code   claude mcp add cyberterm -- cyberterm +mcp
+  Codex CLI     codex mcp add cyberterm -- cyberterm +mcp
+  Gemini CLI    ~/.gemini/settings.json:
+                  {\"mcpServers\": {\"cyberterm\": {\"command\": \"cyberterm\", \"args\": [\"+mcp\"]}}}
+  Others        command \"cyberterm\", arguments [\"+mcp\"], transport stdio
+
+Run inside Cyberterm, the agent talks to that window (CYBERTERM_SOCKET);
+elsewhere, to the most recently started one.
+";

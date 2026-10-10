@@ -28,6 +28,12 @@ use crate::session::UserEvent;
 /// How long a connection waits for the GUI thread to answer.
 const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long an agent's request may wait for the user to answer a consent
+/// prompt. The window gives up a little earlier (`CONSENT_TTL`), so a late
+/// "allow" never runs something whose caller already stopped waiting.
+pub const AGENT_TIMEOUT: Duration = Duration::from_secs(300);
+pub const CONSENT_TTL: Duration = Duration::from_secs(290);
+
 #[derive(Debug, Deserialize)]
 pub struct Request {
     #[serde(default)]
@@ -237,9 +243,14 @@ fn serve(stream: UnixStream, proxy: EventLoopProxy<UserEvent>) {
             ),
             Ok(request) => {
                 let id = request.id.clone();
+                let wait = if request.params.get("agent").is_some() {
+                    AGENT_TIMEOUT
+                } else {
+                    REPLY_TIMEOUT
+                };
                 let (tx, rx) = mpsc::channel();
                 let sent = proxy.send_event(UserEvent::Control(Call { request, reply: tx }));
-                match sent.ok().and_then(|_| rx.recv_timeout(REPLY_TIMEOUT).ok()) {
+                match sent.ok().and_then(|_| rx.recv_timeout(wait).ok()) {
                     Some(response) => response,
                     None => Response::new(id, Err(RpcError::failed("terminal did not answer"))),
                 }
@@ -278,8 +289,19 @@ pub fn find_socket() -> Option<PathBuf> {
 
 /// Sends one request and waits for its response.
 pub fn call(socket: &Path, method: &str, params: Value) -> io::Result<Response> {
+    call_with_timeout(socket, method, params, REPLY_TIMEOUT)
+}
+
+/// [`call`] for requests that may wait longer (an agent's, which can wait
+/// for the user's consent).
+pub fn call_with_timeout(
+    socket: &Path,
+    method: &str,
+    params: Value,
+    timeout: Duration,
+) -> io::Result<Response> {
     let mut stream = UnixStream::connect(socket)?;
-    stream.set_read_timeout(Some(REPLY_TIMEOUT + Duration::from_secs(1)))?;
+    stream.set_read_timeout(Some(timeout + Duration::from_secs(1)))?;
     let request =
         serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": method, "params": params});
     let mut text = request.to_string();

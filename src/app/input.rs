@@ -16,6 +16,12 @@ impl App {
             (ElementState::Pressed, false) => KeyState::Press,
         };
 
+        // An agent's consent prompt takes every key until it's answered.
+        if self.consent_pending() {
+            self.consent_key(&event);
+            return;
+        }
+
         if self.theme_menu.is_open {
             if state != KeyState::Release {
                 self.handle_theme_menu_key(&event.logical_key);
@@ -711,6 +717,7 @@ impl App {
             .and_then(|c| c.get(ClipKind::Clipboard))
             .is_some_and(|t| !t.is_empty());
 
+        let agent_pane = Some(self.focused).filter(|&p| self.pane_has_agent(p));
         let mut items = Vec::new();
         let mut add = |label: &str, hint: String, enabled: bool, action: MenuAction| {
             items.push((
@@ -801,6 +808,14 @@ impl App {
                 String::new(),
                 has_previous && !meta.running(),
                 MenuAction::Diff(block, meta.clone()),
+            );
+        }
+        if let Some(pane) = agent_pane {
+            add(
+                "Revoke Agent Access",
+                String::new(),
+                true,
+                MenuAction::RevokeAgents(pane),
             );
         }
         let b = &self.bindings;
@@ -894,6 +909,7 @@ impl App {
             MenuAction::Watch(command, cwd) => self.watch(&command, cwd),
             MenuAction::Diff(block, meta) => self.diff_with_previous(block, &meta),
             MenuAction::ViewJson(block) => self.view_json(block),
+            MenuAction::RevokeAgents(pane) => self.revoke_agents(pane),
         }
     }
 

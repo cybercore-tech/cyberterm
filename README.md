@@ -50,6 +50,7 @@ cyberterm +sessions                # list daemon sessions
 cyberterm +history [words]         # search saved commands and their output
 cyberterm +json [file]             # browse JSON as a collapsible tree (or pipe it in)
 cyberterm +kill-session <name>     # end a daemon session and its shells
+cyberterm +mcp                     # MCP server so AI agents can work with your panes (+mcp --help)
 ```
 
 ## ⌨️ Keys and mouse
@@ -241,6 +242,31 @@ and in the window with **Ctrl+Shift+H**:
   - Arrows/`hjkl` move, Enter folds, `e`/`c` expand or collapse everything.
   - `/` searches, `y` copies the node's path (`.items[3].name`) and `Y` its value.
   - It works on its own too: `curl -s api/health | cyberterm +json`, including JSON Lines.
+
+## 🤖 AI agents
+
+`cyberterm +mcp` is an [MCP](https://modelcontextprotocol.io) server, so any agent that speaks MCP can work with your terminal: Claude Code, Codex CLI, Gemini CLI, Cursor, Zed and others.
+
+```bash
+claude mcp add cyberterm -- cyberterm +mcp     # Claude Code
+codex mcp add cyberterm -- cyberterm +mcp      # Codex CLI
+# anything else: command "cyberterm", args ["+mcp"], stdio transport
+```
+
+- **Tools:** `list_panes`, `read_pane`, `recent_commands` (command, exit code, duration and output), `search_history`, `run_command` (in a new pane), `wait_for_command`, `send_text`.
+  - Run from inside Cyberterm, the agent works with that window; from elsewhere, with the most recently started one.
+- **You stay in charge:**
+  - The first time an agent reads a pane, a prompt asks you. Typing into a pane or running a command asks every time.
+  - Answer with **Enter** to allow once, **a** to allow for that pane (or, for commands, from then on), or **Esc** to deny.
+  - What will be typed is shown with Enter and control keys made visible, so nothing hides in it.
+  - Commands run in a new pane split below yours, so you see them and keep your focus.
+- **You can see what agents do:**
+  - Panes an agent works with show a `◆ agent-name` badge.
+  - Right-click → **Revoke Agent Access** withdraws its grants for that pane.
+  - Every request is logged to `~/.local/state/cyberterm/agents.log`.
+- **Settings:** `[agents]` sets `read` and `write` to `"ask"`, `"allow"` or `"deny"`; `enabled = false` turns agent access off.
+
+The prompts keep well-behaved agents from acting silently. They aren't a sandbox: a program already running as you can reach the control socket directly.
 
 ## 🐚 Shell integration
 

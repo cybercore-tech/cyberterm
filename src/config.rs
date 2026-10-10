@@ -33,6 +33,7 @@ pub struct CyberConfig {
     pub daemon: DaemonConfig,
     pub history: HistoryConfig,
     pub notify: NotifyConfig,
+    pub agents: AgentsConfig,
     pub blocks: BlocksConfig,
     pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
@@ -61,6 +62,7 @@ impl Default for CyberConfig {
             daemon: DaemonConfig::default(),
             history: HistoryConfig::default(),
             notify: NotifyConfig::default(),
+            agents: AgentsConfig::default(),
             blocks: BlocksConfig::default(),
             links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
@@ -413,6 +415,44 @@ impl Default for NotifyConfig {
     fn default() -> Self {
         Self {
             long_command_seconds: 10,
+        }
+    }
+}
+
+/// What an AI agent connected through `cyberterm +mcp` may do without
+/// asking.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentPolicy {
+    /// Ask in the window each time (with "allow for this pane" to stop
+    /// asking).
+    Ask,
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct AgentsConfig {
+    /// Accept requests from AI agents (`cyberterm +mcp`) at all.
+    pub enabled: bool,
+    /// Reading a pane's text and its recent commands.
+    pub read: AgentPolicy,
+    /// Typing into a pane and running commands in new panes. `allow`
+    /// lets agents act without asking -- only for agents you'd hand your
+    /// keyboard to.
+    pub write: AgentPolicy,
+    /// Record every agent request in `$XDG_STATE_HOME/cyberterm/agents.log`.
+    pub audit_log: bool,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            read: AgentPolicy::Ask,
+            write: AgentPolicy::Ask,
+            audit_log: true,
         }
     }
 }
