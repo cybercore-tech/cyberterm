@@ -65,6 +65,7 @@ pub enum Action {
     Rewind,
     CommandPalette,
     FlightLog,
+    AgentChanges,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -294,6 +295,11 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "flight_log",
         "Flight log: what the agent in this tab did",
     ),
+    (
+        Action::AgentChanges,
+        "agent_changes",
+        "Changes: what the agent in this tab changed",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -368,6 +374,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+u", "rewind"),
     ("ctrl+shift+p", "command_palette"),
     ("ctrl+shift+l", "flight_log"),
+    ("ctrl+shift+m", "agent_changes"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

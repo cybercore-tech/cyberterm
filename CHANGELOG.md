@@ -15,6 +15,9 @@
   - **Live state:** working, needs you, done or stopped, with counts and the timeline; failed commands show their last output line, and Enter opens a command's output.
   - **Tab marks:** `◆` working, `◆!` needs you, `✓` done.
   - **Notifications:** a desktop notification when an agent you're not looking at needs you or has finished.
+- **Changes view** (`Ctrl+Shift+M`, or `c` in the Flight log): what the agent in this tab changed since it started.
+  - **What it shows:** commits, uncommitted work and new files, as files with `+`/`−` counts and a diff with line numbers; it refreshes while the agent works.
+  - **Keys:** **e** opens a file at its first change; **r** reverts it, after asking.
 - **Desktop notifications from programs** (OSC 9 and OSC 777) are understood. An agent sending one shows as needing you.
 
 ## 0.2.1 — 2026-10-10

@@ -90,6 +90,7 @@ cyberterm +agent <name> [task]     # run a coding agent in its own worktree and 
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Bigger / smaller / reset font |
 | `Ctrl+Shift+,` | Theme picker |
 | `Ctrl+Shift+L` | Flight log: what the agent in this tab did |
+| `Ctrl+Shift+M` | Changes: what the agent in this tab changed |
 | `Ctrl+Shift+R` | Reload the config now |
 
 Rebind or free any of them under `[keybindings]` (`"ctrl+shift+k" = "none"`
@@ -341,6 +342,16 @@ cyberterm +agent log fix-the-flaky-login -o -f   # with output, following live
 - **A desktop notification** says when an agent you're not looking at needs you or has finished.
 - **Where "needs you" comes from:** the agent's hooks, or a desktop notification it sends through the terminal (OSC 9 or OSC 777, which Codex and others use).
 - **After the agent quits,** the tab keeps its log.
+
+#### Changes
+
+`Ctrl+Shift+M` (or `c` in the Flight log) shows what the agent in this tab changed: its worktree compared with where it started. That covers the commits it made, the work it hasn't committed yet, and new files.
+
+- **The layout:** files on the left with `+`/`−` counts, the agent's commits below them, and the selected file's diff on the right with line numbers.
+- **It keeps up:** the view refreshes while the agent works.
+- **Keys:** **↑↓** choose a file, **PgUp/PgDn** scroll, **e** opens it in your editor at the first change, **y** copies its path.
+- **r puts a file back** the way it was when the agent started, after asking. A file the agent created is removed.
+- **It's plain git** in the worktree, so it works the same for every agent, and your own diff settings don't change it.
 
 It works with any agent, at the level of detail each one allows:
 

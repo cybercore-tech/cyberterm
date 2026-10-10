@@ -321,6 +321,11 @@ impl App {
         self.request_redraw();
     }
 
+    /// The agent session a tab shows.
+    pub(super) fn flight_session(&self, tab: TabId) -> Option<String> {
+        self.flight.tab_session.get(&tab).cloned()
+    }
+
     fn panel_entries(&self, tab: TabId) -> &[Entry] {
         self.flight
             .tab_session
@@ -355,6 +360,7 @@ impl App {
             .and_then(|p| p.selected)
             .unwrap_or(len.saturating_sub(1));
         let mut copy = None;
+        let mut open_changes = false;
         if let Some(panel) = self.flight.open.get_mut(&tab) {
             let last = len.saturating_sub(1);
             let to = |i: usize| if i >= last { None } else { Some(i) };
@@ -370,6 +376,10 @@ impl App {
                     if !panel.expanded.remove(&entry) {
                         panel.expanded.insert(entry);
                     }
+                }
+                Key::Character(c) if c.as_str() == "c" => {
+                    self.flight.focused = false;
+                    open_changes = true;
                 }
                 Key::Character(c) if c.as_str() == "y" => {
                     copy = self.panel_entries(tab).get(entry).map(|e| match e {
@@ -389,6 +399,9 @@ impl App {
         if let Some(text) = copy.filter(|t| !t.is_empty()) {
             self.copy_text(&text);
             self.lua_set_status("Copied", false);
+        }
+        if open_changes {
+            self.open_changes();
         }
         self.request_redraw();
         true
