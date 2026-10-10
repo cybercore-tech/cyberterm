@@ -332,6 +332,14 @@ Host *
   ControlPersist 10m
 ```
 
+### Live ports
+
+Start a dev server (`npm run dev`, `cargo run`, `python -m http.server`) and a `:3000` chip appears in the pane's corner within a second. Click it, or right-click → **Open localhost:3000**, to open it in your browser.
+- **Which ports:** only ports opened by programs started in that pane, read from `/proc`.
+- **When the server stops:** the chip disappears.
+- **Who else sees them:** `list_panes` reports them too, so scripts and AI agents can find your dev server.
+- **Settings:** `[ports] url` changes what a click opens.
+
 ## 🐚 Shell integration
 
 ```bash
