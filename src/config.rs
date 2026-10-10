@@ -463,6 +463,12 @@ pub struct AgentsConfig {
     /// Where those worktrees go; empty means next to the repository
     /// (`../<repo>-<id>`).
     pub worktree_dir: String,
+    /// Record the commands agents run through bash and zsh in their
+    /// flight log (any agent).
+    pub record_commands: bool,
+    /// Use agents' own hooks where Cyberterm knows them (Claude Code), for
+    /// prompts, output and edits.
+    pub hooks: bool,
     /// Agents to offer besides the known ones found on PATH, or overrides
     /// for them (`[agents.launch.<name>]`).
     pub launch: std::collections::BTreeMap<String, AgentLaunch>,
@@ -491,6 +497,8 @@ impl Default for AgentsConfig {
             audit_log: true,
             worktrees: true,
             worktree_dir: String::new(),
+            record_commands: true,
+            hooks: true,
             launch: Default::default(),
         }
     }

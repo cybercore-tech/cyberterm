@@ -135,6 +135,11 @@ audit_log = true
 worktrees = true
 # Where worktrees go; empty means next to the repository.
 worktree_dir = ""
+# The flight log (`cyberterm +agent log`): record the commands agents run
+# through bash and zsh (any agent), and use agents' own hooks where
+# Cyberterm knows them (Claude Code) for prompts, output and edits.
+record_commands = true
+hooks = true
 # Other agents, or changes to a known one:
 # [agents.launch.mine]
 # command = "my-agent --flag"
