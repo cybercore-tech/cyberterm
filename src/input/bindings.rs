@@ -59,6 +59,8 @@ pub enum Action {
     ShowLastOutput,
     FindInScrollback,
     HistorySearch,
+    AskAi,
+    ExplainError,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -258,6 +260,16 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "history_search",
         "Search saved commands and their output",
     ),
+    (
+        Action::AskAi,
+        "ask_ai",
+        "Ask AI for a command in plain English",
+    ),
+    (
+        Action::ExplainError,
+        "explain_error",
+        "Ask AI to explain the last failed command",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -326,6 +338,8 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+y", "copy_last_output"),
     ("ctrl+shift+f", "find"),
     ("ctrl+shift+h", "history_search"),
+    ("ctrl+shift+i", "ask_ai"),
+    ("ctrl+shift+j", "explain_error"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

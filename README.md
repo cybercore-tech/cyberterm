@@ -268,6 +268,33 @@ codex mcp add cyberterm -- cyberterm +mcp      # Codex CLI
 
 The prompts keep well-behaved agents from acting silently. They aren't a sandbox: a program already running as you can reach the control socket directly.
 
+### Ask and Explain
+
+Cyberterm can also ask a model for help:
+
+- **Explain this error:** a failed command's right-click menu has **Explain with AI**, and **Ctrl+Shift+J** explains the newest failure in the pane. The model gets the command, its exit code and output, the directory and git state, and returns what went wrong plus a fix when there is one.
+- **Plain English to a command:** **Ctrl+Shift+I**, then type what you want ("find files over 100MB here", "undo my last commit but keep the changes").
+
+Answers come with a risk rating: safe, caution or dangerous. Cyberterm also checks the command itself for things like recursive deletes, force-pushes, `curl | sh`, disk writes and `sudo`, and raises the rating if the model rated it too low.
+
+**Enter** types the command at your prompt. It never runs until you press Enter yourself. **c** copies it, **Esc** closes the panel.
+
+Pick a provider in `[ai]`:
+
+```toml
+[ai]
+provider = "anthropic"                   # key in ANTHROPIC_API_KEY; model defaults to claude-opus-5-5
+# provider = "openai"                    # any OpenAI-compatible API (key in OPENAI_API_KEY)
+# model = "gpt-5"
+# provider = "openai"                    # Ollama or LM Studio on this machine, no key
+# base_url = "http://localhost:11434/v1"
+# model = "qwen3:8b"
+# provider = "command"                   # any CLI that reads the prompt on stdin
+# command = ["claude", "-p"]
+```
+
+Before anything is sent, command output is redacted (tokens, passwords and keys are stripped, as in saved history) and trimmed to the last 12,000 characters (`max_context_chars`). The panel header shows which model and host it goes to.
+
 ## 🐚 Shell integration
 
 ```bash

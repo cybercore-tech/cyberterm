@@ -34,6 +34,7 @@ pub struct CyberConfig {
     pub history: HistoryConfig,
     pub notify: NotifyConfig,
     pub agents: AgentsConfig,
+    pub ai: AiConfig,
     pub blocks: BlocksConfig,
     pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
@@ -63,6 +64,7 @@ impl Default for CyberConfig {
             history: HistoryConfig::default(),
             notify: NotifyConfig::default(),
             agents: AgentsConfig::default(),
+            ai: AiConfig::default(),
             blocks: BlocksConfig::default(),
             links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
@@ -453,6 +455,47 @@ impl Default for AgentsConfig {
             read: AgentPolicy::Ask,
             write: AgentPolicy::Ask,
             audit_log: true,
+        }
+    }
+}
+
+/// Outbound AI (`src/ai.rs`): Explain this error, plain English to a
+/// command.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct AiConfig {
+    /// "anthropic", "openai" (any OpenAI-compatible API, Ollama included)
+    /// or "command"; empty turns AI off.
+    pub provider: String,
+    /// Empty: claude-opus-5-5 for anthropic; required for openai.
+    pub model: String,
+    /// Empty: the provider's public API. For Ollama,
+    /// "http://localhost:11434/v1".
+    pub base_url: String,
+    /// The environment variable holding the API key. Empty:
+    /// ANTHROPIC_API_KEY / OPENAI_API_KEY. Local servers need none.
+    pub api_key_env: String,
+    /// For provider = "command": the program and its arguments; the prompt
+    /// goes to its stdin, e.g. ["claude", "-p"].
+    pub command: Vec<String>,
+    /// Anthropic only: how hard the model thinks (low, medium, high).
+    pub effort: String,
+    pub timeout_seconds: u64,
+    /// Most characters of command output sent (the end is kept).
+    pub max_context_chars: usize,
+}
+
+impl Default for AiConfig {
+    fn default() -> Self {
+        Self {
+            provider: String::new(),
+            model: String::new(),
+            base_url: String::new(),
+            api_key_env: String::new(),
+            command: Vec::new(),
+            effort: "low".into(),
+            timeout_seconds: 120,
+            max_context_chars: 12_000,
         }
     }
 }

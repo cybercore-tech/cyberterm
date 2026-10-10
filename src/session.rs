@@ -33,6 +33,8 @@ pub enum UserEvent {
     /// The session daemon's connection closed, or the daemon detached this
     /// client (the session was attached elsewhere); the reason.
     DaemonLost(String),
+    /// An AI answer (`src/ai.rs`) for the request with this number.
+    Ai(u64, Result<crate::ai::Answer, String>),
 }
 
 /// Where terminal and daemon events go: the window's event loop, or a

@@ -125,6 +125,29 @@ write = "ask"
 # Log every agent request to ~/.local/state/cyberterm/agents.log.
 audit_log = true
 
+[ai]
+# Explain this error (failed command's menu, Ctrl+Shift+J) and plain
+# English to a command (Ctrl+Shift+I). Suggested commands are only typed at
+# the prompt for you to read; they never run by themselves. Command output
+# is redacted (tokens, passwords) before it's sent. Pick one provider:
+#
+#   provider = "anthropic"            # key in ANTHROPIC_API_KEY; model defaults to claude-opus-5-5
+#   provider = "openai"               # any OpenAI-compatible API
+#   model = "gpt-5"                   #   key in OPENAI_API_KEY
+#   provider = "openai"               # Ollama, on this machine, no key
+#   base_url = "http://localhost:11434/v1"
+#   model = "qwen3:8b"
+#   provider = "command"              # any CLI reading the prompt on stdin
+#   command = ["claude", "-p"]
+provider = ""
+model = ""
+base_url = ""
+api_key_env = ""
+command = []
+effort = "low"
+timeout_seconds = 120
+max_context_chars = 12000
+
 [daemon]
 # Keep shells in a background session daemon: closing (or crashing) the
 # window only detaches, and `cyberterm` / `cyberterm +attach` brings your

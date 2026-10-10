@@ -1,6 +1,7 @@
 // Cyberterm - Fully customizable terminal written in rust.
 // The ultimate, scriptable, vintage-meets-modern terminal engine.
 
+mod ai;
 mod app;
 mod blocks;
 mod boxdraw;
