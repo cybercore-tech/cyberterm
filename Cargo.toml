@@ -1,7 +1,25 @@
 [package]
 name = "cyberterm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+rust-version = "1.88"
+description = "A GPU terminal for developers: splits and sessions, command blocks, searchable history, AI help, inline images and Lua scripting"
+license = "MIT"
+repository = "https://github.com/cybercore-tech/cyberterm"
+homepage = "https://cybercore-tech.github.io/"
+readme = "README.md"
+keywords = ["terminal", "terminal-emulator", "multiplexer", "gpu", "lua"]
+categories = ["command-line-utilities", "development-tools"]
+# Only what the build needs (the theme collection in themes/ is optional
+# and installed separately).
+include = [
+    "src/**",
+    "assets/default-config.toml",
+    "assets/brand/cyberterm-icon.svg",
+    "shell-integration/**",
+    "README.md",
+    "LICENSE",
+]
 
 [dependencies]
 # --- Core Terminal Engine & OS Primitives ---

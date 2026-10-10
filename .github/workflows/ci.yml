@@ -39,3 +39,38 @@ jobs:
             libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev
       - run: cargo test --bin cyberterm --all-features
       - run: RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features --bin cyberterm
+
+  msrv:
+    name: MSRV (1.88)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev
+      - run: cargo check --all-targets --locked
+
+  macos:
+    name: macOS build
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo check --all-targets --locked
+
+  package:
+    name: crate package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GUI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxi-dev libxcursor-dev libxrandr-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev libasound2-dev
+      # Builds the crate from its packaged files alone, as crates.io would.
+      - run: cargo publish --dry-run --locked

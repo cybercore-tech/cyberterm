@@ -70,7 +70,7 @@ pub struct SshTarget {
 /// ssh options that take a value (from ssh(1)).
 const SSH_VALUE_OPTS: &str = "BbcDEeFIiJLlmopRSWw";
 
-/// Parses ssh's argv (argv[0] included). None for anything that isn't a
+/// Parses ssh's argv (`argv[0]` included). None for anything that isn't a
 /// plain connection (`ssh -V`, `ssh -O check`, missing destination).
 pub fn ssh_target(args: &[String]) -> Option<SshTarget> {
     if program(args) != "ssh" {
