@@ -326,6 +326,14 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
+        "+themes" => {
+            let code = crate::theme_install::run(&config_root.join("themes"), &args[2..]);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            CliAction::ExitCleanly
+        }
+
         "+history" => {
             run_history(&args[2..]);
             CliAction::ExitCleanly
@@ -426,6 +434,9 @@ pub fn handle_arguments(
             println!("  cyberterm +attach [name]           reattach a daemon session (default: most recent)");
             println!("  cyberterm +sessions                list daemon sessions");
             println!("  cyberterm +history [words] [...]   search saved commands and their output (+history --help)");
+            println!(
+                "  cyberterm +themes [install|remove]  theme collections: 1,500+ more on request"
+            );
             println!("  cyberterm +mcp                     MCP server for AI agents (+mcp --help to connect one)");
             println!("  cyberterm +kill-session <name>     end a daemon session and its shells");
             println!("  cyberterm +daemon                  run the session daemon (normally started for you)");

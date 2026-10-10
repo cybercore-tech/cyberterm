@@ -34,7 +34,7 @@ impl ThemeRegistry {
         let active = catalog.active_id().to_string();
         for (id, entry) in catalog.iter() {
             let palette = entry.document.palette_for(catalog.active_appearance());
-            let slots = [
+            let normal = [
                 &palette.bg,
                 &palette.red,
                 &palette.acid_green,
@@ -43,16 +43,16 @@ impl ThemeRegistry {
                 &palette.hot_pink,
                 &palette.cyan,
                 &palette.white,
-                &palette.muted,
-                &palette.red,
-                &palette.acid_green,
-                &palette.orange,
-                &palette.purple,
-                &palette.hot_pink,
-                &palette.cyan,
-                &palette.white,
             ];
-            let raw_colors: Vec<String> = slots.iter().map(|color| format!("#{color}")).collect();
+            // The catalog defines eight colors; derive the bright eight so
+            // programs that use them for emphasis keep their contrast
+            // (lighter on dark themes, deeper on light ones).
+            let dark = luminance(&palette.bg) < 0.5;
+            let mut raw_colors: Vec<String> = normal.iter().map(|c| format!("#{c}")).collect();
+            raw_colors.push(format!("#{}", palette.muted));
+            for c in &normal[1..] {
+                raw_colors.push(format!("#{}", brighten(c, dark)));
+            }
             let mut colors = [0u32; 16];
             for (index, value) in raw_colors.iter().enumerate() {
                 colors[index] = u32::from_str_radix(value.trim_start_matches('#'), 16).unwrap_or(0);
@@ -73,8 +73,31 @@ impl ThemeRegistry {
                 self.themes.push(theme);
             }
         }
-        self.themes.sort_by(|a, b| a.name.cmp(&b.name));
+        self.sort();
         Some(active)
+    }
+
+    /// Groups themes by family (built-in first, the Cybercore families next,
+    /// then installed collections) and sorts by name within each.
+    pub fn sort(&mut self) {
+        let selected = self.themes.get(self.selected_index).map(|t| t.name.clone());
+        self.themes.sort_by(|a, b| {
+            (
+                category_rank(&a.category),
+                a.category.to_lowercase(),
+                a.name.to_lowercase(),
+            )
+                .cmp(&(
+                    category_rank(&b.category),
+                    b.category.to_lowercase(),
+                    b.name.to_lowercase(),
+                ))
+        });
+        if let Some(name) = selected {
+            if let Some(i) = self.themes.iter().position(|t| t.name == name) {
+                self.selected_index = i;
+            }
+        }
     }
 
     /// Loads every theme this box actually has, in both real shapes that
@@ -90,48 +113,13 @@ impl ThemeRegistry {
     pub fn load_from_dir<P: AsRef<Path>>(base_dir: P) -> Self {
         let base_dir = base_dir.as_ref();
         let mut themes = Vec::new();
-
-        if let Ok(entries) = fs::read_dir(base_dir) {
-            for entry in entries.flatten() {
-                let path = entry.path();
-                if path.is_file() && path.extension().is_some_and(|e| e == "conf") {
-                    if let Ok(theme) = Self::parse_theme_file(&path) {
-                        themes.push(theme);
-                    }
-                }
-            }
-        }
-
-        // Use a recursive closure or manual deep iteration loop to exhaust the new tree layout
-        if let Ok(categories) = fs::read_dir(base_dir) {
-            for cat_entry in categories.flatten() {
-                if cat_entry.path().is_dir() {
-                    if let Ok(sub_folders) = fs::read_dir(cat_entry.path()) {
-                        for folder_entry in sub_folders.flatten() {
-                            if folder_entry.path().is_dir() {
-                                if let Ok(files) = fs::read_dir(folder_entry.path()) {
-                                    for file_entry in files.flatten() {
-                                        let file_path = file_entry.path();
-                                        if file_path.is_file()
-                                            && file_path.extension().is_some_and(|e| e == "json")
-                                        {
-                                            if let Ok(theme) = Self::parse_json_theme(&file_path) {
-                                                themes.push(theme);
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        ThemeRegistry {
+        collect_themes(base_dir, base_dir, 0, &mut themes);
+        let mut registry = ThemeRegistry {
             themes,
             selected_index: 0,
-        }
+        };
+        registry.sort();
+        registry
     }
 
     /// Parses a real Kitty terminal theme file: flat, space-separated
@@ -276,6 +264,97 @@ impl ThemeRegistry {
     }
 }
 
+/// Walks the themes folder: `*.conf` (Kitty format) and `*.json` themes at
+/// any depth up to four. A `.conf` file's category is the folder it's in
+/// below the themes folder (`iterm2`, `kitty`), or `built-in` at the top.
+fn collect_themes(base: &Path, dir: &Path, depth: usize, out: &mut Vec<Theme>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_themes(base, &path, depth + 1, out);
+            continue;
+        }
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("conf") => {
+                if let Ok(mut theme) = ThemeRegistry::parse_theme_file(&path) {
+                    if depth > 0 {
+                        if let Some(top) = path
+                            .strip_prefix(base)
+                            .ok()
+                            .and_then(|rel| rel.components().next())
+                        {
+                            theme.category = top.as_os_str().to_string_lossy().into_owned();
+                            theme.author = theme.category.clone();
+                        }
+                    }
+                    out.push(theme);
+                }
+            }
+            Some("json") => {
+                if path.file_name().is_some_and(|n| n == "theme_template.json") {
+                    continue;
+                }
+                if let Ok(theme) = ThemeRegistry::parse_json_theme(&path) {
+                    out.push(theme);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Sort order of theme families: built-in, then the Cybercore families,
+/// then everything else.
+fn category_rank(category: &str) -> u8 {
+    match category {
+        "built-in" => 0,
+        "default" | "cyberdyne" | "cyberpunk" | "dystopian" | "neosynth" | "synthwave"
+        | "omarchy-live" => 1,
+        "popular" => 2,
+        _ => 3,
+    }
+}
+
+fn rgb(hex: &str) -> [f32; 3] {
+    let v = u32::from_str_radix(hex.trim_start_matches('#'), 16).unwrap_or(0);
+    [
+        (v >> 16) as f32,
+        ((v >> 8) & 0xff) as f32,
+        (v & 0xff) as f32,
+    ]
+}
+
+/// Relative brightness, 0 (black) to 1 (white).
+pub(crate) fn luminance(hex: &str) -> f32 {
+    let [r, g, b] = rgb(hex);
+    (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+}
+
+/// A bright variant: mixed toward white on dark themes, toward black
+/// (deeper) on light ones.
+fn brighten(hex: &str, dark: bool) -> String {
+    let c = rgb(hex);
+    let mix = |v: f32| {
+        if dark {
+            v + (255.0 - v) * 0.3
+        } else {
+            v * 0.78
+        }
+    };
+    format!(
+        "{:02x}{:02x}{:02x}",
+        mix(c[0]) as u8,
+        mix(c[1]) as u8,
+        mix(c[2]) as u8
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -349,5 +428,42 @@ mod tests {
         assert_eq!(registry.themes[0].name, "one");
 
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn nested_conf_files_take_their_folder_as_category() {
+        let dir = std::env::temp_dir().join(format!("ct-theme-cat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("iterm2")).unwrap();
+        std::fs::create_dir_all(dir.join("popular")).unwrap();
+        let conf = "background #000000\nforeground #ffffff\ncolor1 #ff0000\n";
+        std::fs::write(dir.join("top.conf"), conf).unwrap();
+        std::fs::write(dir.join("iterm2/Zed.conf"), conf).unwrap();
+        std::fs::write(dir.join("popular/Dracula.conf"), conf).unwrap();
+        let r = ThemeRegistry::load_from_dir(&dir);
+        let got: Vec<(&str, &str)> = r
+            .themes
+            .iter()
+            .map(|t| (t.category.as_str(), t.name.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("built-in", "top"),
+                ("popular", "Dracula"),
+                ("iterm2", "Zed")
+            ]
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn bright_variants_lighten_dark_themes_and_deepen_light_ones() {
+        assert!(luminance("000000") < 0.01 && luminance("ffffff") > 0.99);
+        let dark = brighten("ff0040", true);
+        assert_eq!(&dark[..2], "ff");
+        assert!(u8::from_str_radix(&dark[4..6], 16).unwrap() > 0x40);
+        let light = brighten("80c0ff", false);
+        assert!(u8::from_str_radix(&light[..2], 16).unwrap() < 0x80);
     }
 }

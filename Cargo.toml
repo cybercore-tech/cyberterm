@@ -10,13 +10,14 @@ homepage = "https://cybercore-tech.github.io/"
 readme = "README.md"
 keywords = ["terminal", "terminal-emulator", "multiplexer", "gpu", "lua"]
 categories = ["command-line-utilities", "development-tools"]
-# Only what the build needs (the theme collection in themes/ is optional
-# and installed separately).
+# Only what the build needs (themes/popular is bundled; the other theme
+# collections are installed on request with `cyberterm +themes`).
 include = [
     "src/**",
     "assets/default-config.toml",
     "assets/brand/cyberterm-icon.svg",
     "shell-integration/**",
+    "themes/popular/**",
     "README.md",
     "LICENSE",
 ]

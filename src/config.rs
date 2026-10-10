@@ -700,7 +700,26 @@ pub fn initialize_cyberterm_directories() -> Result<PathBuf, std::io::Error> {
     }
 
     initialize_builtin_themes(&themes_dir)?;
+    initialize_popular_themes(&themes_dir)?;
     Ok(config_dir)
+}
+
+/// Writes the bundled popular themes (src/popular_themes.rs) into
+/// `themes/popular/`, without touching files that are already there.
+fn initialize_popular_themes(themes_dir: &std::path::Path) -> Result<(), std::io::Error> {
+    let dir = themes_dir.join("popular");
+    fs::create_dir_all(&dir)?;
+    for (name, content) in crate::popular_themes::THEMES {
+        let path = dir.join(format!("{name}.conf"));
+        if !path.exists() {
+            fs::write(path, content)?;
+        }
+    }
+    let license = dir.join("LICENSE");
+    if !license.exists() {
+        fs::write(license, crate::popular_themes::LICENSE)?;
+    }
+    Ok(())
 }
 
 fn initialize_builtin_themes(themes_dir: &std::path::Path) -> Result<(), std::io::Error> {

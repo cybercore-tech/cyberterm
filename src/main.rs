@@ -21,6 +21,7 @@ mod layout;
 mod layout_file;
 mod mcp;
 mod mux;
+mod popular_themes;
 mod procs;
 mod renderer;
 mod renderer_images;
@@ -28,6 +29,7 @@ mod rewind;
 mod session;
 mod shell;
 mod theme;
+mod theme_install;
 mod tty_client;
 mod ui;
 

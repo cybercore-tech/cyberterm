@@ -178,7 +178,7 @@ impl App {
             Action::FontIncrease => self.zoom((self.font_size + 1.0).min(72.0)),
             Action::FontDecrease => self.zoom((self.font_size - 1.0).max(4.0)),
             Action::FontReset => self.zoom(self.config.font.size),
-            Action::ThemeMenu => self.theme_menu.is_open = true,
+            Action::ThemeMenu => self.open_theme_menu(),
             Action::ReloadConfig => self.reload_config(true),
             Action::Split(dir) => self.split(dir),
             Action::ClosePane => self.close_pane(self.focused),
