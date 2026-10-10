@@ -486,6 +486,15 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
+        // A `+command` this version doesn't have: say so, instead of
+        // quietly opening a window (an older cyberterm on PATH would).
+        other if other.starts_with('+') => {
+            eprintln!(
+                "cyberterm: unknown command {other:?} (cyberterm {}); see cyberterm +help",
+                env!("CARGO_PKG_VERSION")
+            );
+            std::process::exit(2);
+        }
         _ => CliAction::RunTerminal,
     }
 }
