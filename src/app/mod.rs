@@ -43,6 +43,7 @@ use crate::ui;
 use crate::ui::context_menu;
 
 mod agents;
+mod ai;
 mod blocks;
 mod control;
 mod daemon;
@@ -134,6 +135,7 @@ enum MenuAction {
     Diff(blocks::BlockRef, crate::shell::BlockMeta),
     ViewJson(blocks::BlockRef),
     RevokeAgents(PaneId),
+    Explain(blocks::BlockRef, shell::BlockMeta),
 }
 
 /// An open right-click menu, anchored at a cell of the focused pane.
@@ -210,6 +212,9 @@ pub struct App {
     history_ui: Option<overlays::HistoryUi>,
     /// AI agents' pending consent prompts, grants and badges.
     agents: agents::AgentState,
+    /// The AI panel (Ask / Explain), and the last request number.
+    ai_panel: Option<ai::AiPanel>,
+    ai_seq: u64,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -290,6 +295,8 @@ impl App {
             find: None,
             history_ui: None,
             agents: agents::AgentState::default(),
+            ai_panel: None,
+            ai_seq: 0,
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -808,6 +815,9 @@ impl App {
                 }
             }
             self.draw_agent_badge(pane.id, &mut frame);
+            if self.ai_panel_pane() == Some(pane.id) {
+                self.draw_ai(&mut frame);
+            }
             if focused {
                 self.draw_consent(&mut frame);
             }
@@ -1194,6 +1204,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             UserEvent::Term(id, event) => self.on_term_event(event_loop, id, event),
             UserEvent::DaemonLost(reason) => self.daemon_lost(&reason),
+            UserEvent::Ai(seq, result) => self.on_ai_answer(seq, result),
             UserEvent::Control(call) => {
                 self.on_control_call(call);
                 if self.exit_requested {

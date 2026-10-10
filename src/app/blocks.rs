@@ -18,7 +18,7 @@ pub struct BlockRef {
     pub mark: u64,
 }
 
-fn shell_name(program: Option<&str>) -> String {
+pub(super) fn shell_name(program: Option<&str>) -> String {
     program
         .map(str::to_string)
         .or_else(|| std::env::var("SHELL").ok())
@@ -165,7 +165,7 @@ impl App {
         ))
     }
 
-    fn span_and_output(&self, block: BlockRef) -> Option<(BlockSpan, String)> {
+    pub(super) fn span_and_output(&self, block: BlockRef) -> Option<(BlockSpan, String)> {
         let pane = self.pane(block.pane)?;
         let term = pane.session.term.lock();
         let span = blk::span_of(&*term, block.mark)?;
