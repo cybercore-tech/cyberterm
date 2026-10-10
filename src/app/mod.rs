@@ -281,6 +281,7 @@ impl App {
         let (bindings, errors) =
             Bindings::new(&config.keybindings, config.keyboard.leader.as_deref());
         report_config_errors(&errors);
+        rewind::apply_rewind_config(&config.rewind);
         let mut app = Self {
             proxy,
             gpu: None,
@@ -512,6 +513,7 @@ impl App {
 
     fn apply_config(&mut self, new: CyberConfig) {
         let old = std::mem::replace(&mut self.config, new);
+        rewind::apply_rewind_config(&self.config.rewind);
         let (bindings, errors) = Bindings::new(
             &self.config.keybindings,
             self.config.keyboard.leader.as_deref(),
@@ -755,12 +757,12 @@ impl App {
                 .filter(|_| focused)
                 .map(|h| (h.row, h.cols.clone()))
                 .collect();
-            let history_frame = if focused {
-                let size = pane.session.size();
-                self.draw_history(size.cols, size.rows)
-            } else {
-                None
-            };
+            let size = pane.session.size();
+            let history_frame = self.draw_rewind(pane.id, size.cols, size.rows).or_else(|| {
+                focused
+                    .then(|| self.draw_history(size.cols, size.rows))
+                    .flatten()
+            });
             let mut frame = if let Some(f) = history_frame {
                 f
             } else if focused && self.theme_menu.is_open {

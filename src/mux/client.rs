@@ -36,6 +36,7 @@ pub struct Replica {
     pub pid: u32,
     info: PaneInfo,
     parser: Processor<StdSyncHandler>,
+    rewind: Arc<Mutex<crate::rewind::Recorder>>,
 }
 
 type Replicas = Arc<Mutex<HashMap<PaneId, Replica>>>;
@@ -46,6 +47,7 @@ pub type ReplicaHandle = (
     Arc<FairMutex<Term<EventProxy>>>,
     Arc<Mutex<ShellState>>,
     u32,
+    Arc<Mutex<crate::rewind::Recorder>>,
 );
 
 pub struct DaemonClient {
@@ -216,7 +218,7 @@ impl DaemonClient {
         self.replicas
             .lock()
             .get(&pane)
-            .map(|r| (r.term.clone(), r.shell.clone(), r.pid))
+            .map(|r| (r.term.clone(), r.shell.clone(), r.pid, r.rewind.clone()))
     }
 
     pub fn forget(&self, pane: PaneId) {
@@ -262,6 +264,7 @@ fn new_replica(info: &PaneInfo, sink: &EventSink) -> Replica {
         pid: info.pid,
         info: info.clone(),
         parser: Processor::new(),
+        rewind: Arc::new(Mutex::new(crate::rewind::Recorder::new(grid(info.size)))),
     }
 }
 
@@ -284,6 +287,7 @@ fn read_loop(
                 if let Some(r) = replicas.lock().get_mut(&pane) {
                     let mut term = r.term.lock();
                     r.parser.advance(&mut *term, &bytes);
+                    r.rewind.lock().feed(&bytes);
                 }
                 wake(pane, TermEvent::Wakeup);
             }
@@ -296,6 +300,7 @@ fn read_loop(
                     *term = Term::new(super::term_config(&r.info.settings), &size, listener);
                     r.parser = Processor::new();
                     r.parser.advance(&mut *term, &bytes);
+                    r.rewind.lock().reset(size, &bytes);
                 }
                 wake(pane, TermEvent::Wakeup);
             }

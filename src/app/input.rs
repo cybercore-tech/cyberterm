@@ -27,6 +27,11 @@ impl App {
             return;
         }
 
+        if self.rewind_open() {
+            self.rewind_key(&event);
+            return;
+        }
+
         if self.ai_open() {
             self.ai_key(&event);
             return;

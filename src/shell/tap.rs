@@ -362,8 +362,15 @@ impl TappedPty {
                 raw: vec![0; 64 * 1024],
                 pending: Vec::new(),
                 pos: 0,
+                recorder: None,
             },
         })
+    }
+
+    /// Also records everything read (after the tap) for rewind.
+    pub fn with_recorder(mut self, recorder: Arc<Mutex<crate::rewind::Recorder>>) -> Self {
+        self.reader.recorder = Some(recorder);
+        self
     }
 }
 
@@ -373,6 +380,7 @@ pub struct TapReader {
     raw: Vec<u8>,
     pending: Vec<u8>,
     pos: usize,
+    recorder: Option<Arc<Mutex<crate::rewind::Recorder>>>,
 }
 
 impl Read for TapReader {
@@ -385,6 +393,9 @@ impl Read for TapReader {
             self.pending.clear();
             self.pos = 0;
             self.tap.feed(&self.raw[..n], &mut self.pending);
+            if let Some(rec) = &self.recorder {
+                rec.lock().feed(&self.pending);
+            }
             // A read that was nothing but swallowed escapes loops for more
             // instead of returning Ok(0), which callers treat as EOF.
         }
