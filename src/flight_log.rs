@@ -557,17 +557,21 @@ pub enum Entry {
 }
 
 /// The command a shell actually ran, without wrappers agents put around
-/// it: Claude Code's `source <snapshot> && ... && eval '<command>' && pwd
-/// -P >| <file>`.
+/// it: Claude Code's `source <snapshot> && ... && eval '<command>'
+/// [< /dev/null] && pwd -P >| <file>`.
 pub fn unwrap_command(raw: &str) -> String {
     let raw = raw.trim();
-    if let (Some(start), Some(end)) = (raw.find(" eval '"), raw.rfind("' && pwd -P")) {
-        let inner = &raw[start + 7..end];
-        if start + 7 <= end {
-            return inner.replace("'\"'\"'", "'").replace("'\\''", "'");
-        }
+    let (Some(start), Some(tail)) = (raw.find(" eval '"), raw.rfind(" && pwd -P")) else {
+        return raw.to_string();
+    };
+    let body = raw[..tail].trim_end();
+    let body = body.strip_suffix("< /dev/null").unwrap_or(body).trim_end();
+    match body.strip_suffix('\'') {
+        Some(body) if body.len() >= start + 7 => body[start + 7..]
+            .replace("'\"'\"'", "'")
+            .replace("'\\''", "'"),
+        _ => raw.to_string(),
     }
-    raw.to_string()
 }
 
 fn same_command(a: &str, b: &str) -> bool {
@@ -582,6 +586,10 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
     // for the shell's exit code (index into `out`).
     let mut by_id: std::collections::HashMap<String, usize> = Default::default();
     let mut agent_cmds: Vec<usize> = Vec::new();
+    // With Claude Code's hooks on, its own reports are the list of what it
+    // ran; shell commands that match none of them are its internals (the
+    // shell snapshot it takes at start), so they're left out.
+    let agent_reports_commands = events.iter().any(|e| e.source == "claude");
 
     for e in events {
         match e.kind.as_str() {
@@ -638,7 +646,7 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
                     }
                     continue;
                 }
-                if command.trim().is_empty() {
+                if command.trim().is_empty() || (e.source == "shell" && agent_reports_commands) {
                     continue;
                 }
                 out.push(Entry::Command {
@@ -935,6 +943,68 @@ mod tests {
     }
 
     #[test]
+    fn claude_shell_wrappers_as_seen_in_a_real_session() {
+        // Claude Code 2.1.292, from a real session's flight log.
+        let raw = "source /home/raven/.claude/shell-snapshots/snapshot-zsh-1791664476397-plxaym.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB NO_BARE_GLOB_QUAL 2>/dev/null || true && { \\builtin unalias -- 'unsetenv'; \\builtin unset -f -- 'unsetenv'; } >/dev/null 2>&1 || true && eval 'ls -la; cat PKGBUILD 2>/dev/null | head -60' < /dev/null && pwd -P >| /home/raven/.cache/omarchy/tmp/claude-ac3a-cwd";
+        assert_eq!(
+            unwrap_command(raw),
+            "ls -la; cat PKGBUILD 2>/dev/null | head -60"
+        );
+
+        let shell = |kind: &str, id: &str, cmd: &str| {
+            ev(kind, "shell", |e| {
+                e.id = Some(id.into());
+                e.command = Some(cmd.into());
+                if kind == "command" {
+                    e.exit = Some(0);
+                    e.duration_ms = Some(1500);
+                }
+            })
+        };
+        let wrapped = raw.to_string();
+        let events = vec![
+            // Claude's start-up shell snapshot: internals, not its work.
+            shell("command_start", "sh-1", "env"),
+            shell("command", "sh-1", "env"),
+            ev("command_start", "claude", |e| {
+                e.id = Some("tu1".into());
+                e.command = Some("ls -la; cat PKGBUILD 2>/dev/null | head -60".into());
+            }),
+            shell("command_start", "sh-2", &wrapped),
+            shell("command", "sh-2", &wrapped),
+            ev("command", "claude", |e| {
+                e.id = Some("tu1".into());
+                e.command = Some("ls -la; cat PKGBUILD 2>/dev/null | head -60".into());
+                e.output = Some("package() {".into());
+            }),
+        ];
+        let t = timeline(&events);
+        assert_eq!(t.len(), 1, "{t:#?}");
+        assert!(matches!(
+            &t[0],
+            Entry::Command {
+                exit: Some(0),
+                duration_ms: Some(1500),
+                output: Some(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn agents_without_hooks_keep_their_shell_commands() {
+        let events = vec![
+            ev("prompt", "hook", |e| e.text = Some("go".into())),
+            ev("command", "shell", |e| {
+                e.id = Some("sh-1".into());
+                e.command = Some("npm run dev".into());
+                e.exit = Some(0);
+            }),
+        ];
+        assert_eq!(timeline(&events).len(), 2);
+    }
+
+    #[test]
     fn claude_shell_wrappers_are_unwrapped() {
         let raw = "source /h/.claude/shell-snapshots/s.sh 2>/dev/null || true && setopt NO_EXTENDED_GLOB 2>/dev/null || true && eval 'grep -n '\"'\"'fn main'\"'\"' src/main.rs' && pwd -P >| /tmp/claude-1-cwd";
         assert_eq!(unwrap_command(raw), "grep -n 'fn main' src/main.rs");
@@ -972,7 +1042,8 @@ mod tests {
                 e.output = Some("test result: FAILED".into());
             }),
             ev("edit", "claude", |e| e.path = Some("src/a.rs".into())),
-            // A command only the shell saw (another agent), still running.
+            // A command only the shell saw: with Claude's hooks on, that's
+            // Claude's internals, so it's left out.
             ev("command_start", "shell", |e| {
                 e.id = Some("sh-2".into());
                 e.command = Some("npm run dev".into());
@@ -981,7 +1052,7 @@ mod tests {
             ev("done", "claude", |_| {}),
         ];
         let t = timeline(&events);
-        assert_eq!(t.len(), 6, "{t:#?}");
+        assert_eq!(t.len(), 5, "{t:#?}");
         match &t[1] {
             Entry::Command {
                 command,
@@ -999,9 +1070,9 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
-        assert!(
-            matches!(&t[3], Entry::Command { running: true, command, .. } if command == "npm run dev")
-        );
+        assert!(!t
+            .iter()
+            .any(|e| matches!(e, Entry::Command { command, .. } if command == "npm run dev")));
         let text = render(&t, true, false);
         assert!(text.contains("✗ 101 cargo test 5.3s"), "{text}");
         assert!(text.contains("◆ needs you permission"), "{text}");
