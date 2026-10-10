@@ -37,6 +37,15 @@
     .keys{display:grid;grid-template-columns:repeat(2,1fr);gap:8px 30px;margin-top:38px;font:12px var(--mono);color:var(--muted)}.keys div{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line2)}
     .install-ways{display:grid;gap:12px;margin-top:38px}.install-way{border:1px solid #31523f;background:#0c120f}.install-way h3{margin:0;padding:12px 14px 0;color:var(--muted);font:600 11px var(--mono);letter-spacing:.1em;text-transform:uppercase}.install-way .install-box{margin:0;border:0;background:transparent}.install-way p{margin:0;padding:0 14px 14px;color:var(--dim);font:11px/1.6 var(--mono)}
     @media(max-width:900px){.feature-grid{grid-template-columns:1fr;gap:40px}.power-grid{grid-template-columns:1fr 1fr}}@media(max-width:650px){.power-grid,.keys{grid-template-columns:1fr}.demo pre,.demo{font-size:10px}}
+
+    .section-head{max-width:780px;margin-bottom:34px}.section-head .section-lede{margin-bottom:0}
+    .shot{margin:0;border:1px solid #2b4938;background:#0a0e0c;box-shadow:0 22px 60px rgba(0,0,0,.35)}.shot img{display:block;width:100%;height:auto;aspect-ratio:16/10}.shot figcaption{display:flex;justify-content:space-between;gap:12px;padding:9px 14px;border-top:1px solid var(--line2);background:#101613;color:var(--muted);font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase}.shot figcaption b{color:var(--green);font-weight:500}
+    .shots-2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    .card-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:16px}.card-row .feature-item{height:100%}
+    .power-grid.with-shots{grid-template-columns:repeat(2,1fr);gap:16px}.power.with-shot{padding:0;display:flex;flex-direction:column}.power.with-shot .shot{border:0;border-bottom:1px solid var(--line);box-shadow:none}.power.with-shot .power-body{padding:20px 22px 22px}.power.with-shot h3{margin:14px 0 8px}
+    .mock{aspect-ratio:16/10;padding:18px 20px;background:#05080c;font:12px/1.75 var(--mono);color:#c5d8ca;border-bottom:1px solid var(--line);overflow:hidden}.mock .pane-split{display:grid;grid-template-columns:1fr 1fr;height:100%}.mock .pane{padding:0 12px;border-left:1px solid #2b4938}.mock .pane:first-child{border-left:0;padding-left:0}.mock-caption{display:flex;justify-content:space-between;padding:9px 14px;border-bottom:1px solid var(--line);background:#101613;color:var(--muted);font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase}
+    .code-row{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:16px}.code-row .demo{height:100%}
+    @media(max-width:1000px){.card-row{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.shots-2,.power-grid.with-shots,.code-row,.card-row{grid-template-columns:1fr}.mock{font-size:10px}}
   </style>
 </head>
 <body>
@@ -54,13 +63,47 @@
 </div><div class="terminal-status"><span><b>●</b> BLOCKS</span><span><b>●</b> HISTORY</span><span><b>●</b> SESSION: work</span><span><b>●</b> LUA LOADED</span></div></div>
     </div></section>
     <div class="stats"><div class="wrap stats-grid"><div class="stat"><span class="stat-index">01 // WORKSPACE</span><strong>Splits, tabs, sessions</strong><small>tmux built in</small></div><div class="stat"><span class="stat-index">02 // BLOCKS</span><strong>Every command a block</strong><small>rerun · diff · search</small></div><div class="stat"><span class="stat-index">03 // AI</span><strong>Both directions</strong><small>MCP bridge · explain · ask</small></div><div class="stat"><span class="stat-index">04 // SCRIPT</span><strong>Lua, built in</strong><small>events · keys · commands</small></div></div></div>
-    <section class="feature" id="workspace"><div class="wrap feature-grid"><div><p class="section-kicker">the workspace</p><h2>Stop reaching for tmux.</h2><p class="section-lede">Splits and tabs with familiar keys, an optional tmux-style leader, and sessions that outlive the window.</p><div class="feature-list">
-<div class="feature-item"><b>Splits and tabs</b><span>Split right or down, zoom a pane, type into every pane at once, drag dividers. Ghostty-style keys, or set <code>leader = "ctrl+b"</code> and keep your tmux habits.</span></div>
-<div class="feature-item"><b>Sessions that survive</b><span>Turn on the session daemon and closing (or crashing) the window only detaches. <code>cyberterm +attach</code> brings tabs, splits and running programs back — in a window, or inside any other terminal over SSH.</span></div>
+    <section class="feature" id="workspace"><div class="wrap">
+<div class="section-head"><p class="section-kicker">the workspace</p><h2>Stop reaching for tmux.</h2><p class="section-lede">Splits and tabs with familiar keys, an optional tmux-style leader, and sessions that outlive the window.</p></div>
+<figure class="shot"><img src="assets/screens/workspace.webp" width="1200" height="750" loading="lazy" alt="Cyberterm with three tabs and three panes: recent commands on the left, a dev server with a :5173 port chip top right, a log tail bottom right"><figcaption><span><b>●</b> 3 tabs · 3 panes · a dev server with its live port</span><span>real screenshot</span></figcaption></figure>
+<div class="card-row">
+<div class="feature-item"><b>Splits and tabs</b><span>Split right or down, zoom a pane, type into every pane at once, drag dividers. Ghostty-style keys, or set <code>leader = &quot;ctrl+b&quot;</code> and keep your tmux habits.</span></div>
+<div class="feature-item"><b>Sessions that survive</b><span>Turn on the session daemon and closing (or crashing) the window only detaches. <code>cyberterm +attach</code> brings it all back — in a window, or inside any terminal over SSH.</span></div>
 <div class="feature-item"><b>Layouts as code</b><span>Commit a <code>.cyberterm/layout.toml</code> and <code>cyberterm +layout</code> opens the whole project: server, tests, logs.</span></div>
 <div class="feature-item"><b>Scriptable</b><span>A local control socket (<code>cyberterm +ctl</code>) lists, reads, types into and arranges panes from any script.</span></div>
-</div></div>
-<div class="demo"><div class="demo-top"><span>.cyberterm/layout.toml</span><span>+layout</span></div><div class="demo-body"><pre><span class="k-pink">[[tab]]</span>
+</div></div></section>
+
+    <section class="feature" id="blocks"><div class="wrap">
+<div class="section-head"><p class="section-kicker">command blocks</p><h2>Every command is a block.</h2><p class="section-lede">With shell integration (zsh, bash, fish), each command gets a colored gutter and a badge with its exit code and run time — and goes into a history you can search.</p></div>
+<div class="shots-2"><figure class="shot"><img src="assets/screens/blocks.webp" width="1200" height="750" loading="lazy" alt="Three command blocks: a passing git status, a failing make test with its traceback and an exit-code badge, and a passing ls"><figcaption><span><b>●</b> blocks · exit codes · run times</span><span>real screenshot</span></figcaption></figure><figure class="shot"><img src="assets/screens/history.webp" width="1200" height="750" loading="lazy" alt="The history browser listing recent commands with pass or fail marks and a preview of the selected command's output"><figcaption><span><b>●</b> history · ctrl+shift+h</span><span>real screenshot</span></figcaption></figure></div>
+<div class="card-row">
+<div class="feature-item"><b>Act on any command</b><span>Right-click to copy its output, rerun it, run it in a new pane, watch it every 2 s, or diff it against its previous run.</span></div>
+<div class="feature-item"><b>History that remembers output</b><span>Every command and its output goes into a local SQLite database, with secrets stripped. Search it with <code>Ctrl+Shift+H</code> or <code>cyberterm +history</code>.</span></div>
+<div class="feature-item"><b>Smart output</b><span><code>src/main.rs:42:7</code> opens in your editor at that line. JSON opens as a collapsible tree. <code>Ctrl+Shift+F</code> searches the scrollback.</span></div>
+<div class="feature-item"><b>Notified when it matters</b><span>A long build finishing while you're in another window sends a desktop notification.</span></div>
+</div></div></section>
+
+    <section class="feature" id="ai"><div class="wrap">
+<div class="section-head"><p class="section-kicker">ai, both ways</p><h2>Your agent can see the terminal. You stay in charge.</h2><p class="section-lede">Any AI you choose, connected in either direction — and nothing runs without you seeing it.</p></div>
+<div class="shots-2"><figure class="shot"><img src="assets/screens/explain.webp" width="1200" height="750" loading="lazy" alt="The AI panel explaining a failed test: DATABASE_URL isn't set, with a suggested export command rated safe"><figcaption><span><b>●</b> explain this error · ctrl+shift+j</span><span>real ui · example answer</span></figcaption></figure><figure class="shot"><img src="assets/screens/agent.webp" width="1200" height="750" loading="lazy" alt="A consent prompt: claude-code wants to run a command in a new pane, with allow once, allow from now on, and deny"><figcaption><span><b>●</b> an agent asks first</span><span>real screenshot</span></figcaption></figure></div>
+<div class="card-row">
+<div class="feature-item"><b>Agents in, through MCP</b><span><code>claude mcp add cyberterm -- cyberterm +mcp</code> lets Claude Code, Codex, Gemini CLI, Cursor or Zed read panes and run commands in a new pane you can see. Everything asks first and is logged.</span></div>
+<div class="feature-item"><b>Explain this error</b><span><code>Ctrl+Shift+J</code> on a failed command: what went wrong and a fix, from the command, its output, your directory and git state.</span></div>
+<div class="feature-item"><b>Plain English to a command</b><span><code>Ctrl+Shift+I</code>: &quot;undo my last commit but keep the changes&quot;. One command, a risk rating Cyberterm double-checks, typed at your prompt — never run.</span></div>
+<div class="feature-item"><b>Bring your own model</b><span>Anthropic, any OpenAI-compatible API (local Ollama included), or a command-line tool like <code>claude -p</code>. Output is redacted before it&#39;s sent.</span></div>
+</div></div></section>
+
+    <section class="feature" id="power"><div class="wrap">
+<div class="section-head"><p class="section-kicker">power features</p><h2>Things other terminals don't do.</h2><p class="section-lede">Small, sharp tools for the moments that usually cost you.</p></div>
+<div class="power-grid with-shots">
+<article class="power with-shot"><figure class="shot"><img src="assets/screens/danger.webp" width="1200" height="750" loading="lazy" alt="A pane on a production host with a red border; typing sudo rm -rf shows a confirmation: deletes recursively, runs as root"><figcaption><span><b>●</b> danger mode</span><span>staged prod session</span></figcaption></figure><div class="power-body"><span class="card-index"><span>01</span><span class="chip red">⚠ ssh prod-db</span></span><h3>Danger mode</h3><p>A pane on a production host, a root shell or a folder you mark turns red. Type <code>rm -rf</code> or <code>git push --force</code> there and Enter waits for a second Enter. <kbd>Ctrl+Shift+D</kbd> marks any pane.</p></div></article>
+<article class="power with-shot"><figure class="shot"><img src="assets/screens/palette.webp" width="1200" height="750" loading="lazy" alt="The command palette with split typed, listing the split actions with their shortcuts"><figcaption><span><b>●</b> command palette</span><span>ctrl+shift+p</span></figcaption></figure><div class="power-body"><span class="card-index"><span>02</span><span class="k-dim">ctrl+shift+p</span></span><h3>Command palette</h3><p>One fuzzy search over every action, your Lua commands, open panes and tabs, themes and recent commands. What you use often floats to the top.</p></div></article>
+<article class="power with-shot"><figure class="shot"><img src="assets/screens/rewind.webp" width="1200" height="750" loading="lazy" alt="Rewind showing a deploy halfway through, with the rewind bar at the bottom"><figcaption><span><b>●</b> rewind</span><span>6/9 · 4s ago</span></figcaption></figure><div class="power-body"><span class="card-index"><span>03</span><span class="k-dim">⏪</span></span><h3>Rewind</h3><p><kbd>Ctrl+Shift+U</kbd> steps back through what a pane showed: a TUI two minutes ago, output wiped by <code>clear</code>, a progress bar halfway through.</p></div></article>
+<article class="power with-shot"><figure class="shot"><img src="assets/screens/images.webp" width="1200" height="750" loading="lazy" alt="An image shown inline in the terminal with kitten icat"><figcaption><span><b>●</b> inline images</span><span>kitten icat</span></figcaption></figure><div class="power-body"><span class="card-index"><span>04</span><span class="k-dim">kitty graphics</span></span><h3>Inline images</h3><p>Speaks the kitty graphics protocol, so <code>kitten icat</code> and other kitty-protocol tools show real images right in the pane. They scroll with the text and appear in rewind.</p></div></article>
+<article class="power with-shot"><figure class="shot"><img src="assets/screens/ports.webp" width="1200" height="750" loading="lazy" alt="A pane running a dev server with a :5173 port chip in its corner"><figcaption><span><b>●</b> live ports</span><span>:5173</span></figcaption></figure><div class="power-body"><span class="card-index"><span>05</span><span class="chip">:5173</span></span><h3>Live ports</h3><p>Start a dev server and a port chip appears on its pane. Click it to open the browser. Stop the server and it's gone.</p></div></article>
+<article class="power with-shot"><div class="mock"><div class="pane-split"><div class="pane"><span class="k-green">deploy@web1:/srv/app$</span> tail -f log/app.log<br><span class="k-dim">… Ctrl+Shift+O</span></div><div class="pane"><span class="k-dim">raven ❯</span> ssh deploy@web1 -t &#39;cd /srv/app &amp;&amp; exec &quot;$SHELL&quot; -l&#39;<br><span class="k-green">deploy@web1:/srv/app$</span> <span class="cursor"></span></div></div></div><div class="mock-caption"><span>illustration</span><span>same host, same directory</span></div><div class="power-body"><span class="card-index"><span>06</span><span class="k-dim">ssh</span></span><h3>SSH-aware splits</h3><p>Split a pane that's in an SSH session and the new pane opens on the same host, with the same options — and in the same directory when the remote shell reports it.</p></div></article>
+</div>
+<div class="code-row"><div class="demo"><div class="demo-top"><span>.cyberterm/layout.toml</span><span>+layout</span></div><div class="demo-body"><pre><span class="k-pink">[[tab]]</span>
 title = <span class="k-green">"api"</span>
 cwd = <span class="k-green">"~/work/api"</span>
 
@@ -71,48 +114,8 @@ split = <span class="k-green">"right"</span>
 command = <span class="k-green">"npm run dev"</span>
 
 <span class="k-pink">[[tab.layout.panes]]</span>
-command = <span class="k-green">"npm test -- --watch"</span>
-
-<span class="k-dim"># cyberterm +layout   → both panes, running</span></pre></div></div></div></section>
-
-    <section class="feature" id="blocks"><div class="wrap feature-grid"><div class="demo"><div class="demo-top"><span>history · ctrl+shift+h</span><span>sqlite + fts5</span></div><div class="demo-body"><pre><span class="k-dim">&gt;</span> deploy failed<span class="cursor"></span>
-
-<span class="k-red">✗</span>  2m  ~/infra     ./deploy.sh staging
-<span class="k-green">✓</span>  1h  ~/infra     terraform plan
-<span class="k-red">✗</span>  3d  ~/api       kubectl rollout status
-<span class="k-dim">──────────────────────────────────────────</span>
-<span class="k-dim">error: release "api" failed: timed out
-waiting for the condition</span>
-
-<span class="k-dim">↑↓ select · Enter insert · Tab output</span></pre></div></div>
-<div><p class="section-kicker">command blocks</p><h2>Every command is a block.</h2><p class="section-lede">With shell integration (zsh, bash, fish), each command gets a colored gutter and a badge with its exit code and run time.</p><div class="feature-list">
-<div class="feature-item"><b>Act on any command</b><span>Right-click to copy its output, rerun it, run it in a new pane, watch it every 2 s, or diff it against its previous run.</span></div>
-<div class="feature-item"><b>History that remembers output</b><span>Every command and its output goes into a local SQLite database, with secrets stripped. Search it with <code>Ctrl+Shift+H</code> or <code>cyberterm +history</code>.</span></div>
-<div class="feature-item"><b>Smart output</b><span><code>src/main.rs:42:7</code> opens in your editor at that line. JSON opens as a collapsible tree. <code>Ctrl+Shift+F</code> searches the scrollback.</span></div>
-<div class="feature-item"><b>Notified when it matters</b><span>A long build finishing while you're in another window sends a desktop notification.</span></div>
-</div></div></div></section>
-
-    <section class="feature" id="ai"><div class="wrap feature-grid"><div><p class="section-kicker">ai, both ways</p><h2>Your agent can see the terminal. You stay in charge.</h2><p class="section-lede">Any AI you choose, connected in either direction — and nothing runs without you seeing it.</p><div class="feature-list">
-<div class="feature-item"><b>Agents in, through MCP</b><span><code>claude mcp add cyberterm -- cyberterm +mcp</code> lets Claude Code, Codex, Gemini CLI, Cursor or Zed list panes, read recent commands and their output, and run commands in a new pane you can see. Reading asks first, typing and running ask every time, a badge marks the panes they touch, and every request goes to an audit log.</span></div>
-<div class="feature-item"><b>Explain this error</b><span><code>Ctrl+Shift+J</code> on a failed command: what went wrong and a fix, from the command, its output, your directory and git state.</span></div>
-<div class="feature-item"><b>Plain English to a command</b><span><code>Ctrl+Shift+I</code>: "undo my last commit but keep the changes". You get one command, a risk rating that Cyberterm double-checks itself, and it's typed at your prompt — never run.</span></div>
-<div class="feature-item"><b>Bring your own model</b><span>Anthropic, any OpenAI-compatible API (local Ollama included), or any command-line tool like <code>claude -p</code>. Output is redacted before it's sent.</span></div>
-</div></div>
-<div class="demo"><div class="demo-top"><span>agent consent</span><span>agents.log</span></div><div class="demo-body"><pre><span class="k-dim">claude-code ▸ read_pane 0 · recent_commands 0</span>
-raven@box:~/api$ cargo build
-<span class="k-green">   Compiling</span> api v0.4.1
-<span class="k-green">    Finished</span> dev [unoptimized]
-raven@box:~/api$ <span class="cursor"></span></pre><div class="ai-panel" style="border-color:#ff3df0"><div class="ai-head" style="background:#ff3df0"><span>◆ claude-code wants to run a command in a new pane:</span></div><div class="ai-body"><span>cargo test --workspace</span><br><span class="k-dim">Enter allow once · a allow its commands from now on · Esc deny</span></div></div></div></div></div></section>
-
-    <section class="feature" id="power"><div class="wrap"><p class="section-kicker">power features</p><h2>Things other terminals don't do.</h2><p class="section-lede">Small, sharp tools for the moments that usually cost you.</p><div class="power-grid">
-<article class="power"><span class="card-index"><span>01</span><span class="chip red">⚠ ssh prod-db</span></span><h3>Danger mode</h3><p>A pane on a production host, a root shell or a folder you mark turns red. Type <code>rm -rf</code> or <code>git push --force</code> there and Enter waits for a second Enter. <kbd>Ctrl+Shift+D</kbd> marks any pane.</p></article>
-<article class="power"><span class="card-index"><span>02</span><span class="k-dim">ssh</span></span><h3>SSH-aware splits</h3><p>Split a pane that's in an SSH session and the new pane opens on the same host, with the same options — and in the same directory when the remote shell reports it.</p></article>
-<article class="power"><span class="card-index"><span>03</span><span class="chip">:3000</span></span><h3>Live ports</h3><p>Start a dev server and a <code>:3000</code> chip appears on its pane. Click it to open the browser. Stop the server and it's gone.</p></article>
-<article class="power"><span class="card-index"><span>04</span><span class="k-dim">⏪</span></span><h3>Rewind</h3><p><kbd>Ctrl+Shift+U</kbd> steps back through what a pane showed: a TUI two minutes ago, output wiped by <code>clear</code>, a progress bar halfway through.</p></article>
-<article class="power"><span class="card-index"><span>05</span><span class="k-dim">kitty graphics</span></span><h3>Inline images</h3><p>Speaks the kitty graphics protocol, so <code>kitten icat</code> and other kitty-protocol tools show real images right in the pane. They scroll with the text and appear in rewind.</p></article>
-<article class="power"><span class="card-index"><span>06</span><span class="k-dim">init.lua</span></span><h3>Lua scripting</h3><p>React to commands finishing, bind keys, add commands, drive panes. It reloads when you save, and a runaway script is stopped after 2 seconds.</p></article>
-</div>
-<div class="feature-grid" style="margin-top:56px"><div class="demo"><div class="demo-top"><span>~/.config/cyberterm/init.lua</span><span>hot reload</span></div><div class="demo-body"><pre><span class="k-dim">-- Show failures with their first line of output</span>
+command = <span class="k-green">"npm test -- --watch"</span></pre></div></div>
+<div class="demo"><div class="demo-top"><span>~/.config/cyberterm/init.lua</span><span>lua · hot reload</span></div><div class="demo-body"><pre><span class="k-dim">-- Show failures with their first line of output</span>
 cyberterm.<span class="k-green">on</span>(<span class="k-amber">"command_finished"</span>, <span class="k-pink">function</span>(ev)
   <span class="k-pink">if</span> ev.exit ~= 0 <span class="k-pink">then</span>
     cyberterm.<span class="k-green">status</span>(ev.command .. <span class="k-amber">" failed: "</span>
@@ -123,8 +126,9 @@ cyberterm.<span class="k-green">on</span>(<span class="k-amber">"command_finishe
 <span class="k-dim">-- Ctrl+Alt+G: lazygit below</span>
 cyberterm.<span class="k-green">bind</span>(<span class="k-amber">"ctrl+alt+g"</span>, <span class="k-pink">function</span>()
   cyberterm.<span class="k-green">split</span>{ direction = <span class="k-amber">"down"</span>, command = <span class="k-amber">"lazygit"</span> }
-<span class="k-pink">end</span>)</pre></div></div>
-<div><p class="section-kicker">keys worth knowing</p><div class="keys" style="grid-template-columns:1fr">
+<span class="k-pink">end</span>)</pre></div></div></div>
+<p class="section-kicker" style="margin-top:56px">keys worth knowing</p><div class="keys">
+<div><span>Command palette</span><kbd>Ctrl+Shift+P</kbd></div>
 <div><span>Split right / down</span><span><kbd>Ctrl+Shift+O</kbd> <kbd>Ctrl+Shift+E</kbd></span></div>
 <div><span>New tab</span><kbd>Ctrl+Shift+T</kbd></div>
 <div><span>Search history</span><kbd>Ctrl+Shift+H</kbd></div>
@@ -132,8 +136,7 @@ cyberterm.<span class="k-green">bind</span>(<span class="k-amber">"ctrl+alt+g"</
 <div><span>Ask AI / explain error</span><span><kbd>Ctrl+Shift+I</kbd> <kbd>Ctrl+Shift+J</kbd></span></div>
 <div><span>Rewind</span><kbd>Ctrl+Shift+U</kbd></div>
 <div><span>Danger mode on/off</span><kbd>Ctrl+Shift+D</kbd></div>
-<div><span>Themes</span><kbd>Ctrl+Shift+,</kbd></div>
-</div></div></div></div></section>
+</div></div></section>
     <section class="themes" id="themes"><div class="wrap theme-grid"><div class="theme-screen"><div class="palette"><i class="swatch" style="background:#111827"></i><i class="swatch" style="background:#ff3df0"></i><i class="swatch" style="background:#39ff88"></i><i class="swatch" style="background:#ffbd4a"></i><i class="swatch" style="background:#7c5cff"></i><i class="swatch" style="background:#25d9ff"></i><i class="swatch" style="background:#d4e7da"></i><i class="swatch" style="background:#0a0e0c"></i></div><pre><b>vaporwave_85</b> // active theme
 
 <span style="color:#ff3df0">$</span> cargo run --release
