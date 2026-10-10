@@ -35,6 +35,54 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use base64::Engine as _;
+
+/// Base64 as kitty accepts it: padding optional, and (because each chunk
+/// of a chunked transfer is encoded on its own) padding may end any chunk.
+const B64: base64::engine::GeneralPurpose = base64::engine::GeneralPurpose::new(
+    &base64::alphabet::STANDARD,
+    base64::engine::GeneralPurposeConfig::new()
+        .with_decode_padding_mode(base64::engine::DecodePaddingMode::Indifferent)
+        .with_decode_allow_trailing_bits(true),
+);
+
+/// Decodes base64 as it arrives, chunk by chunk.
+#[derive(Default)]
+struct B64Stream {
+    decoded: Vec<u8>,
+    /// Characters past the last whole group of four.
+    carry: Vec<u8>,
+    failed: bool,
+}
+
+impl B64Stream {
+    fn push(&mut self, chunk: &[u8]) {
+        if self.failed {
+            return;
+        }
+        self.carry
+            .extend(chunk.iter().copied().filter(|b| !b.is_ascii_whitespace()));
+        let whole = self.carry.len() / 4 * 4;
+        match B64.decode(&self.carry[..whole]) {
+            Ok(bytes) => self.decoded.extend(bytes),
+            Err(_) => self.failed = true,
+        }
+        self.carry.drain(..whole);
+    }
+
+    fn finish(mut self) -> Result<Vec<u8>, String> {
+        if !self.failed && !self.carry.is_empty() {
+            match B64.decode(&self.carry) {
+                Ok(bytes) => self.decoded.extend(bytes),
+                Err(_) => self.failed = true,
+            }
+        }
+        if self.failed {
+            Err("EINVAL:bad base64".into())
+        } else {
+            Ok(self.decoded)
+        }
+    }
+}
 use parking_lot::Mutex;
 
 /// Markers: U+100000 + slot * 256 + row.
@@ -250,7 +298,7 @@ pub struct GraphicsTap {
     respond: Option<Responder>,
     /// A chunked transfer in progress (m=1): its first chunk's keys and
     /// the base64 so far.
-    pending: Option<(Control, Vec<u8>)>,
+    pending: Option<(Control, B64Stream)>,
     /// Ids handed out for `I=` (image number) transmissions.
     next_auto_id: u32,
 }
@@ -375,24 +423,26 @@ impl GraphicsTap {
         let payload = apc.get(split + 1..).unwrap_or_default();
 
         if let Some((first, mut data)) = self.pending.take() {
-            data.extend_from_slice(payload);
+            data.push(payload);
             if control.more {
                 self.pending = Some((first, data));
             } else {
                 let mut first = first;
                 first.quiet = first.quiet.max(control.quiet);
-                self.finish(first, &data, out);
+                self.finish(first, data.finish(), out);
             }
             return;
         }
+        let mut data = B64Stream::default();
+        data.push(payload);
         if control.more {
-            self.pending = Some((control, payload.to_vec()));
+            self.pending = Some((control, data));
         } else {
-            self.finish(control, payload, out);
+            self.finish(control, data.finish(), out);
         }
     }
 
-    fn finish(&mut self, mut c: Control, data: &[u8], out: &mut Vec<u8>) {
+    fn finish(&mut self, mut c: Control, data: Result<Vec<u8>, String>, out: &mut Vec<u8>) {
         match c.action {
             b'q' => {
                 let result = load(&c, data).map(|_| ());
@@ -497,21 +547,14 @@ impl GraphicsTap {
 }
 
 /// Decodes a transmission into an image.
-fn load(c: &Control, data: &[u8]) -> Result<Image, String> {
-    let b64 = |d: &[u8]| {
-        base64::engine::general_purpose::STANDARD
-            .decode(
-                d.iter()
-                    .copied()
-                    .filter(|b| !b.is_ascii_whitespace())
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|_| "EINVAL:bad base64".to_string())
-    };
+/// `data` is the transmission's payload, already base64-decoded (or the
+/// decoding error).
+fn load(c: &Control, data: Result<Vec<u8>, String>) -> Result<Image, String> {
+    let data = data?;
     let mut bytes = match c.medium {
-        b'd' => b64(data)?,
+        b'd' => data,
         b'f' | b't' => {
-            let path = String::from_utf8(b64(data)?).map_err(|_| "EINVAL:bad path")?;
+            let path = String::from_utf8(data).map_err(|_| "EINVAL:bad path")?;
             read_file(&path, c.medium == b't')?
         }
         _ => return Err("EINVAL:transmission medium not supported".into()),
@@ -651,6 +694,45 @@ mod tests {
             .chars()
             .filter_map(decode_marker)
             .collect()
+    }
+
+    #[test]
+    fn chunks_padded_one_by_one_and_unpadded_paths_decode() {
+        // How kitten icat sends a resized image: raw RGB, zlib, each chunk
+        // base64-encoded (and padded) on its own.
+        let (mut t, images, _) = tap();
+        let raw: Vec<u8> = (0..(5 * 3 * 3)).map(|i| i as u8).collect();
+        let z = miniz_oxide::deflate::compress_to_vec_zlib(&raw, 6);
+        let (a, b) = z.split_at(z.len() / 2 + 1);
+        let mut out = Vec::new();
+        t.feed(
+            format!("\x1b_Ga=T,q=2,f=24,o=z,m=1,s=5,v=3;{}\x1b\\", b64(a)).as_bytes(),
+            &mut out,
+        );
+        t.feed(
+            format!("\x1b_Ga=T,q=2,m=0;{}\x1b\\", b64(b)).as_bytes(),
+            &mut out,
+        );
+        assert_eq!(
+            markers(&out).len(),
+            1,
+            "padding between chunks must not break decoding"
+        );
+        assert_eq!(images.lock().placement(0).unwrap().image.width, 5);
+        // An unpadded path, as kitten's file-transfer probe sends it.
+        let path =
+            std::env::temp_dir().join(format!("cyberterm-unpadded-{}.png", std::process::id()));
+        std::fs::write(&path, png_bytes(2, 2)).unwrap();
+        let unpadded = b64(path.to_str().unwrap().as_bytes())
+            .trim_end_matches('=')
+            .to_string();
+        let mut out = Vec::new();
+        t.feed(
+            format!("\x1b_Ga=T,f=100,t=f,i=9;{unpadded}\x1b\\").as_bytes(),
+            &mut out,
+        );
+        assert_eq!(markers(&out).len(), 1);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
