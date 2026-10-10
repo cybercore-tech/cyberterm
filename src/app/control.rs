@@ -71,6 +71,13 @@ impl App {
             "split" => self.rpc_split(p),
             "blocks" => self.rpc_blocks(p),
             "agent_run" => self.rpc_agent_run(p),
+            "lua" => {
+                let name = opt_str(p, "name")?
+                    .ok_or_else(|| RpcError::invalid_params("`name` is required"))?
+                    .to_string();
+                let args = p.get("args").cloned().unwrap_or(Value::Null);
+                self.lua_command(&name, args).map_err(RpcError::failed)
+            }
             "history" => {
                 let path = crate::history::default_path();
                 let store = crate::history::Store::open(&path)

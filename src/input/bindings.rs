@@ -473,7 +473,7 @@ impl Combo {
     /// `logical` is the key as typed (Shift applied), `base` the same key
     /// without modifiers. A binding on a shifted symbol like `ctrl+plus`
     /// matches the logical key and ignores the Shift it took to type it.
-    fn matches(&self, logical: &Key, base: &Key, mods: ModifiersState) -> bool {
+    pub(crate) fn matches(&self, logical: &Key, base: &Key, mods: ModifiersState) -> bool {
         let relevant = ModifiersState::CONTROL
             | ModifiersState::SHIFT
             | ModifiersState::ALT

@@ -38,6 +38,7 @@ pub struct CyberConfig {
     pub danger: DangerConfig,
     pub ports: PortsConfig,
     pub rewind: RewindConfig,
+    pub lua: LuaConfig,
     pub blocks: BlocksConfig,
     pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
@@ -71,6 +72,7 @@ impl Default for CyberConfig {
             danger: DangerConfig::default(),
             ports: PortsConfig::default(),
             rewind: RewindConfig::default(),
+            lua: LuaConfig::default(),
             blocks: BlocksConfig::default(),
             links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
@@ -465,6 +467,24 @@ impl Default for AgentsConfig {
             read: AgentPolicy::Ask,
             write: AgentPolicy::Ask,
             audit_log: true,
+        }
+    }
+}
+
+/// Lua scripting (src/app/lua.rs).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct LuaConfig {
+    pub enabled: bool,
+    /// The script; empty means init.lua next to this config.
+    pub script: String,
+}
+
+impl Default for LuaConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            script: String::new(),
         }
     }
 }

@@ -107,7 +107,8 @@ impl App {
                     // Don't notify about commands that finished while
                     // detached.
                     notified_mark: info.shell.blocks.iter().map(|b| b.mark).max().unwrap_or(0),
-                    block_sig: (0, None),
+                    block_sig: (0, None, None),
+                    started_mark: 0,
                     danger: None,
                     danger_manual: None,
                     ports: Vec::new(),

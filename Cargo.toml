@@ -53,6 +53,7 @@ ureq = { version = "3", features = ["json"] }
 png = "0.18"
 base64 = "0.22"
 miniz_oxide = "0.8"
+mlua = { version = "0.10", features = ["serialize", "lua54", "vendored"] }
 
 # Wayland clipboard + primary selection through the window's own
 # connection (what Alacritty uses). Setting the primary selection via the

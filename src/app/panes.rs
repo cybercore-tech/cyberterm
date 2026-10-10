@@ -88,11 +88,13 @@ impl App {
             title: String::new(),
             pending_command: None,
             notified_mark: 0,
-            block_sig: (0, None),
+            block_sig: (0, None, None),
+            started_mark: 0,
             danger: None,
             danger_manual: None,
             ports: Vec::new(),
         });
+        self.lua_emit("pane_created", serde_json::json!({ "pane": id }));
         Ok(id)
     }
 
@@ -232,7 +234,11 @@ impl App {
         let Some(tab_index) = self.tabs.iter().position(|t| t.root.contains(id)) else {
             return;
         };
+        let changed = id != self.focused;
         self.tabs[tab_index].focused = id;
+        if changed {
+            self.lua_emit("focus_changed", serde_json::json!({ "pane": id }));
+        }
         if tab_index != self.active_tab {
             self.activate_tab(tab_index);
         } else {

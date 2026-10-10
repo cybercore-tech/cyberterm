@@ -51,6 +51,7 @@ mod danger;
 mod graphics;
 pub use daemon::AttachTarget;
 mod input;
+mod lua;
 mod overlays;
 mod panes;
 mod ports;
@@ -105,7 +106,9 @@ struct Pane {
     notified_mark: u64,
     /// (block count, newest finish time) last seen, to skip the block scan
     /// when nothing changed.
-    block_sig: (usize, Option<u64>),
+    block_sig: (usize, Option<u64>, Option<u64>),
+    /// Newest block already announced to Lua as started.
+    started_mark: u64,
     /// Why this pane is in danger mode (`ssh prod-db`, `root`), if it is.
     danger: Option<String>,
     /// Set by hand (Ctrl+Shift+D): forced on or off.
@@ -237,6 +240,8 @@ pub struct App {
     port_hits: ports::PortHits,
     /// Rewind view of a pane (Ctrl+Shift+U).
     rewind: Option<rewind::RewindUi>,
+    /// The Lua script, if any.
+    lua: lua::LuaState,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -323,6 +328,7 @@ impl App {
             danger_confirm: None,
             port_hits: Default::default(),
             rewind: None,
+            lua: Default::default(),
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -364,6 +370,7 @@ impl App {
                 Err(e) => eprintln!("cyberterm: control socket unavailable: {e}"),
             }
         }
+        app.lua_load();
         app
     }
 
@@ -529,6 +536,9 @@ impl App {
     fn apply_config(&mut self, new: CyberConfig) {
         let old = std::mem::replace(&mut self.config, new);
         rewind::apply_rewind_config(&self.config.rewind);
+        if self.config.lua != old.lua {
+            self.lua_load();
+        }
         let (bindings, errors) = Bindings::new(
             &self.config.keybindings,
             self.config.keyboard.leader.as_deref(),
@@ -608,6 +618,7 @@ impl App {
                     let shell = self.panes[index].session.shell.lock();
                     (
                         shell.blocks.len(),
+                        shell.blocks.back().and_then(|b| b.started_ms),
                         shell.blocks.back().and_then(|b| b.finished_ms),
                     )
                 };
@@ -852,6 +863,7 @@ impl App {
                 self.draw_ai(&mut frame);
             }
             if focused {
+                self.draw_lua_status(&mut frame);
                 self.draw_danger_confirm(&mut frame);
                 self.draw_consent(&mut frame);
             }
@@ -1338,8 +1350,17 @@ impl ApplicationHandler<UserEvent> for App {
             self.reload_config(false);
             self.refresh_danger();
             self.refresh_ports();
+            self.lua_poll();
         }
         let mut next = self.last_poll + POLL_INTERVAL;
+        if let Some(at) = self.lua_tick() {
+            next = next.min(at);
+        }
+        if let Some(at) = self.lua_status_until() {
+            next = next.min(at);
+        } else if self.lua_status_shown() {
+            self.lua_clear_status();
+        }
 
         for index in 0..self.panes.len() {
             self.flush_pending_command(index);

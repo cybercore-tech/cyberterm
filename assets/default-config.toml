@@ -128,6 +128,12 @@ write = "ask"
 # Log every agent request to ~/.local/state/cyberterm/agents.log.
 audit_log = true
 
+[lua]
+# Scripts in ~/.config/cyberterm/init.lua (or `script`): react to commands
+# finishing, bind keys, add commands, drive panes. See the README.
+enabled = true
+script = ""
+
 [rewind]
 # Ctrl+Shift+U steps back through what a pane's screen showed. Each pane
 # keeps this much recent output (KiB); new panes pick up changes.
