@@ -320,6 +320,9 @@ impl TermRenderer {
         (cols, rows)
     }
 
+    // The GPU handles plus what to draw; bundling them would only move
+    // the same list into a struct.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,

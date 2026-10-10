@@ -62,6 +62,7 @@ pub enum Action {
     AskAi,
     ExplainError,
     ToggleDanger,
+    Rewind,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -276,6 +277,11 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "toggle_danger",
         "Mark or unmark the pane as dangerous (red, confirms risky commands)",
     ),
+    (
+        Action::Rewind,
+        "rewind",
+        "Step back through what the pane's screen showed",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -347,6 +353,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+i", "ask_ai"),
     ("ctrl+shift+j", "explain_error"),
     ("ctrl+shift+d", "toggle_danger"),
+    ("ctrl+shift+u", "rewind"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

@@ -48,10 +48,13 @@ mod blocks;
 mod control;
 mod daemon;
 mod danger;
+mod graphics;
 pub use daemon::AttachTarget;
 mod input;
 mod overlays;
 mod panes;
+mod ports;
+mod rewind;
 mod ssh;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -107,6 +110,8 @@ struct Pane {
     danger: Option<String>,
     /// Set by hand (Ctrl+Shift+D): forced on or off.
     danger_manual: Option<bool>,
+    /// TCP ports its programs are listening on (live ports).
+    ports: Vec<u16>,
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -142,6 +147,8 @@ enum MenuAction {
     ViewJson(blocks::BlockRef),
     RevokeAgents(PaneId),
     SplitLocal(crate::layout::Direction),
+    OpenPort(u16),
+    Rewind,
     Explain(blocks::BlockRef, shell::BlockMeta),
 }
 
@@ -226,6 +233,10 @@ pub struct App {
     ai_seq: u64,
     /// An Enter held back in a dangerous pane, waiting for a second one.
     danger_confirm: Option<danger::DangerConfirm>,
+    /// Port chips as last drawn, for clicks.
+    port_hits: ports::PortHits,
+    /// Rewind view of a pane (Ctrl+Shift+U).
+    rewind: Option<rewind::RewindUi>,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -310,6 +321,8 @@ impl App {
             ai_panel: None,
             ai_seq: 0,
             danger_confirm: None,
+            port_hits: Default::default(),
+            rewind: None,
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -830,8 +843,11 @@ impl App {
                     self.draw_find(&mut frame);
                 }
             }
-            let used = self.draw_danger_badge(pane, &mut frame);
-            self.draw_agent_badge(pane.id, &mut frame, used);
+            let cell = gpu.renderer.cell_size();
+            self.collect_images(pane, &mut frame, rect, cell, &mut list.images);
+            let mut used = self.draw_danger_badge(pane, &mut frame);
+            used += self.draw_agent_badge(pane.id, &mut frame, used);
+            self.draw_port_chips(pane, &mut frame, used);
             if self.ai_panel_pane() == Some(pane.id) {
                 self.draw_ai(&mut frame);
             }
@@ -1321,6 +1337,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.poll_shared_theme();
             self.reload_config(false);
             self.refresh_danger();
+            self.refresh_ports();
         }
         let mut next = self.last_poll + POLL_INTERVAL;
 

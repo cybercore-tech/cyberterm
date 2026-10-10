@@ -229,6 +229,7 @@ impl App {
                     "command_running": shell.command_running,
                     "last_exit": shell.last_exit,
                     "danger": pane.danger,
+                    "ports": pane.ports,
                 }));
             }
         }
