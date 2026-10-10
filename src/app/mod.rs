@@ -159,6 +159,8 @@ struct ContextMenu {
 struct DrawList {
     panes: Vec<(Rect, Frame, f32, f32)>,
     overlays: Vec<Overlay>,
+    /// Inline image strips, drawn over the panes' text.
+    images: Vec<crate::renderer_images::ImageDraw>,
     /// Index in `panes` of the focused pane.
     focused: Option<usize>,
 }
@@ -968,6 +970,7 @@ impl App {
             },
             &views,
             &list.overlays,
+            &list.images,
         );
         gpu.queue.submit(std::iter::once(encoder.finish()));
         gpu.window.pre_present_notify();

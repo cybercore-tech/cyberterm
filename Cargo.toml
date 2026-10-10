@@ -32,6 +32,9 @@ rusqlite = { version = "0.32", features = ["bundled"] } # command history (SQLit
 regex = "1"                     # secret redaction in recorded history
 libc = "0.2"                    # termios raw mode + window size for the terminal attach client
 ureq = { version = "3", features = ["json"] }
+png = "0.18"
+base64 = "0.22"
+miniz_oxide = "0.8"
 
 # Wayland clipboard + primary selection through the window's own
 # connection (what Alacritty uses). Setting the primary selection via the

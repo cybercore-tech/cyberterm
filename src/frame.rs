@@ -449,6 +449,11 @@ pub fn lines_text<T>(term: &Term<T>, from: i32, to: i32) -> String {
             {
                 continue;
             }
+            // Image markers (src/graphics.rs) read as blank.
+            if crate::graphics::decode_marker(cell.c).is_some() {
+                line_buf.push(' ');
+                continue;
+            }
             line_buf.push(cell.c);
             if let Some(extra) = cell.zerowidth() {
                 line_buf.extend(extra.iter());

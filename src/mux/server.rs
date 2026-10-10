@@ -699,7 +699,7 @@ fn spawn_pane(
     let pty = tty::new(&options, window_size(size), id as u64)?;
     let pid = pty.child().id();
     let shell = Arc::new(Mutex::new(ShellState::default()));
-    let pty = TappedPty::new(pty, shell.clone())?;
+    let pty = TappedPty::new(pty, shell.clone())?.with_da1_answer()?;
 
     let (cmd_tx, cmd_rx) = mpsc::channel();
     let shared = Arc::new(PaneShared {

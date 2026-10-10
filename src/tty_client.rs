@@ -859,7 +859,12 @@ impl Client {
                         }
                         let cell = &line[Column(col)];
                         screen[sy][sx] = OutCell {
-                            ch: cell.c,
+                            // Image markers can't be shown on the host terminal.
+                            ch: if crate::graphics::decode_marker(cell.c).is_some() {
+                                ' '
+                            } else {
+                                cell.c
+                            },
                             extra: cell.zerowidth().filter(|z| !z.is_empty()).map(Box::from),
                             style: Style::of(cell),
                             spacer: cell.flags.intersects(

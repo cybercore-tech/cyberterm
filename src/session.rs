@@ -269,6 +269,7 @@ impl Session {
     }
 
     pub fn resize(&mut self, size: GridSize, cell_width: f32, cell_height: f32) {
+        self.images.lock().cell = (cell_width.max(1.0), cell_height.max(1.0));
         let ws = window_size(size, cell_width, cell_height);
         match &mut self.backend {
             Backend::Local(notifier) => {

@@ -12,6 +12,7 @@ mod control;
 mod danger;
 mod find;
 mod frame;
+mod graphics;
 mod history;
 mod input;
 mod json_viewer;
