@@ -71,6 +71,12 @@ pub struct ThemeMenuState {
     pub is_creating_mode: bool,
     pub theme_name_input: String,
     pub registry: ThemeRegistry,
+    /// Type-to-filter text, the matching themes and the cursor in them.
+    pub query: String,
+    pub view: Vec<usize>,
+    pub cursor: usize,
+    /// The theme when the picker opened, restored on Esc.
+    pub original: Option<String>,
 }
 
 /// Everything that only exists once the window/GPU surface are up --
@@ -350,6 +356,10 @@ impl App {
                 is_creating_mode: false,
                 theme_name_input: String::new(),
                 registry,
+                query: String::new(),
+                view: Vec::new(),
+                cursor: 0,
+                original: None,
             },
             palette: Palette::default(),
             mods: ModifiersState::empty(),
@@ -800,10 +810,18 @@ impl App {
                 f
             } else if focused && self.theme_menu.is_open {
                 let size = pane.session.size();
+                let menu = &self.theme_menu;
                 let lines: Vec<Vec<(String, [u8; 3])>> = ui::theme_menu::build_lines(
-                    &self.theme_menu.registry,
-                    self.theme_menu.is_creating_mode,
-                    &self.theme_menu.theme_name_input,
+                    &ui::theme_menu::View {
+                        registry: &menu.registry,
+                        view: &menu.view,
+                        cursor: menu.cursor,
+                        query: &menu.query,
+                        creating: menu
+                            .is_creating_mode
+                            .then_some(menu.theme_name_input.as_str()),
+                    },
+                    size.cols,
                     size.rows,
                 )
                 .into_iter()
@@ -1060,10 +1078,12 @@ impl App {
                             let _ = Command::new(editor).arg(new_file).status();
                             self.theme_menu.registry =
                                 ThemeRegistry::load_from_dir(&self.themes_dir);
+                            self.theme_menu.registry.append_cybercore_themes();
                         }
                     }
                     self.theme_menu.theme_name_input.clear();
                     self.theme_menu.is_creating_mode = false;
+                    self.theme_menu_refilter();
                 }
                 Key::Named(NamedKey::Escape) => {
                     self.theme_menu.is_creating_mode = false;
@@ -1080,39 +1100,126 @@ impl App {
             return;
         }
 
-        let len = self.theme_menu.registry.themes.len();
+        let n = self.theme_menu.view.len();
+        let mut moved = false;
         match key {
-            Key::Named(NamedKey::ArrowDown | NamedKey::ArrowUp) if len > 0 => {
-                let registry = &mut self.theme_menu.registry;
-                registry.selected_index = if *key == Key::Named(NamedKey::ArrowDown) {
-                    (registry.selected_index + 1) % len
-                } else {
-                    (registry.selected_index + len - 1) % len
-                };
-                let theme = registry.themes[registry.selected_index].clone();
-                self.apply_theme(&theme);
+            Key::Named(NamedKey::ArrowDown) if n > 0 => {
+                self.theme_menu.cursor = (self.theme_menu.cursor + 1) % n;
+                moved = true;
+            }
+            Key::Named(NamedKey::ArrowUp) if n > 0 => {
+                self.theme_menu.cursor = (self.theme_menu.cursor + n - 1) % n;
+                moved = true;
+            }
+            Key::Named(NamedKey::PageDown) if n > 0 => {
+                self.theme_menu.cursor = (self.theme_menu.cursor + 15).min(n - 1);
+                moved = true;
+            }
+            Key::Named(NamedKey::PageUp) if n > 0 => {
+                self.theme_menu.cursor = self.theme_menu.cursor.saturating_sub(15);
+                moved = true;
+            }
+            Key::Named(NamedKey::Home) if n > 0 => {
+                self.theme_menu.cursor = 0;
+                moved = true;
+            }
+            Key::Named(NamedKey::End) if n > 0 => {
+                self.theme_menu.cursor = n - 1;
+                moved = true;
             }
             Key::Named(NamedKey::Enter) => {
                 if let Some(theme) = self
                     .theme_menu
-                    .registry
-                    .themes
-                    .get(self.theme_menu.registry.selected_index)
+                    .view
+                    .get(self.theme_menu.cursor)
+                    .and_then(|&i| self.theme_menu.registry.themes.get(i))
+                    .cloned()
                 {
-                    let theme = theme.clone();
                     self.select_theme(&theme);
                 }
                 self.theme_menu.is_open = false;
             }
-            Key::Named(NamedKey::Escape) => self.theme_menu.is_open = false,
-            Key::Character(c) if c.eq_ignore_ascii_case("n") => {
+            Key::Named(NamedKey::Escape) => {
+                if self.theme_menu.query.is_empty() {
+                    // Cancel: back to the theme from before the preview.
+                    self.theme_menu.is_open = false;
+                    if let Some(name) = self.theme_menu.original.take() {
+                        if let Some(theme) = self
+                            .theme_menu
+                            .registry
+                            .themes
+                            .iter()
+                            .find(|t| t.name == name)
+                            .cloned()
+                        {
+                            self.apply_theme(&theme);
+                        }
+                    }
+                } else {
+                    self.theme_menu.query.clear();
+                    self.theme_menu_refilter();
+                }
+            }
+            Key::Named(NamedKey::Backspace) => {
+                self.theme_menu.query.pop();
+                self.theme_menu_refilter();
+                moved = true;
+            }
+            Key::Character(c) if self.mods.control_key() && c.eq_ignore_ascii_case("n") => {
                 self.theme_menu.is_creating_mode = true;
             }
-            Key::Character(c) if c.eq_ignore_ascii_case("q") => {
-                self.theme_menu.is_open = false;
+            Key::Character(c) if !self.mods.control_key() && !self.mods.alt_key() => {
+                self.theme_menu.query.push_str(c);
+                self.theme_menu_refilter();
+                moved = true;
+            }
+            Key::Named(NamedKey::Space) => {
+                self.theme_menu.query.push(' ');
+                self.theme_menu_refilter();
             }
             _ => {}
         }
+        if moved {
+            if let Some(theme) = self
+                .theme_menu
+                .view
+                .get(self.theme_menu.cursor)
+                .and_then(|&i| self.theme_menu.registry.themes.get(i))
+                .cloned()
+            {
+                self.apply_theme(&theme);
+            }
+        }
+    }
+
+    /// Opens the theme picker on the current theme.
+    pub(super) fn open_theme_menu(&mut self) {
+        // Re-read the themes folder, so collections installed with
+        // `cyberterm +themes` while running show up.
+        let mut registry = ThemeRegistry::load_from_dir(&self.themes_dir);
+        registry.append_cybercore_themes();
+        self.theme_menu.registry = registry;
+        let menu = &mut self.theme_menu;
+        menu.is_open = true;
+        menu.query.clear();
+        menu.original = Some(self.config.theme.clone());
+        self.theme_menu_refilter();
+        let current = self.config.theme.clone();
+        let menu = &mut self.theme_menu;
+        if let Some(pos) = menu
+            .view
+            .iter()
+            .position(|&i| menu.registry.themes[i].name == current)
+        {
+            menu.cursor = pos;
+        }
+        self.request_redraw();
+    }
+
+    fn theme_menu_refilter(&mut self) {
+        let menu = &mut self.theme_menu;
+        menu.view = ui::theme_menu::filter(&menu.registry, &menu.query);
+        menu.cursor = 0;
     }
 
     fn init_gpu(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {

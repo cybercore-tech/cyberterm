@@ -10,8 +10,8 @@
 **A GPU-rendered terminal emulator.** Real PTY handling and VT parsing via
 `alacritty_terminal`, glyph rendering via `glyphon` (cosmic-text + etagere
 on a wgpu pipeline), the Kitty keyboard protocol, shell integration with
-prompt jumping, 12 built-in Kitty-format themes plus the shared Cybercore
-theme catalog, and a config file that applies the moment you save it. No
+prompt jumping, 129 themes out of the box (1,500+ with the optional
+collections), and a config file that applies the moment you save it. No
 Electron, no bundled shell.
 
 **[cybercore-tech.github.io/cyberterm](https://cybercore-tech.github.io/cyberterm/)**
@@ -52,6 +52,7 @@ eval "$(cyberterm +shell-integration zsh)"   # or bash / fish
 ```bash
 cyberterm                          # launch the terminal
 cyberterm +list-themes             # list every theme found in ~/.config/cyberterm/themes
+cyberterm +themes install iterm2   # add a theme collection (+themes lists them)
 cyberterm +set-theme <name>        # switch theme and save it as the default
 cyberterm +set-opacity --custom=0.85
 cyberterm +edit-theme --create-theme <category> <folder> <name>
@@ -481,21 +482,39 @@ osc52 = "copy"        # disabled | copy | paste | copy-paste
 "ctrl+alt+c" = "copy"
 ```
 
-12 curated Kitty-syntax themes ship built-in (`~/.config/cyberterm/themes/*.conf`)
-and load unmodified, so anything pulled straight from
-[kovidgoyal/kitty-themes](https://github.com/kovidgoyal/kitty-themes) drops in
-next to them with zero conversion. `+edit-theme` writes your own custom
-themes as JSON under a `category/folder/` layout alongside the built-ins.
-Press `Ctrl+Shift+,` in the terminal to open the theme picker.
+### Themes
 
-Cyberterm also loads the shared Cybercore theme catalog. Its semantic
-background, foreground, and accent colors map to the terminal's 16 ANSI
-slots; Cyberterm's local Kitty and JSON themes remain available in the same
-picker. Choosing a shared theme saves the selection to the shared Cybercore
-catalog, so compatible Cybercore apps follow that selection too. Cyberterm
-uses the published `cybercore` 0.8 crate and checks the shared catalog
-revision once a second, so updates from Theme Studio or another Cybercore
-app apply without a restart.
+**129 themes come with Cyberterm:**
+- **12 built-in:** Cyberterm's own.
+- **36 popular ones:** Catppuccin (all four), Tokyo Night, Gruvbox, Rosé Pine, Dracula, Nord, Solarized, One Dark/Light, Kanagawa, Everforest, Monokai Pro, GitHub and more, from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (MIT).
+- **81 from the shared Cybercore catalog.**
+
+**Add more on request** (`cyberterm +themes` lists what's installed):
+
+```bash
+cyberterm +themes install iterm2      # 768 themes, iTerm2-Color-Schemes (MIT)
+cyberterm +themes install kitty       # 418 themes, kovidgoyal/kitty-themes (GPL-3.0, for your own use)
+cyberterm +themes install cyberterm   # 200+ extras: games, movies, music, sub-cyber
+cyberterm +themes install all         # all of them: 1,500+ themes
+cyberterm +themes remove kitty
+```
+
+Collections are downloaded into `~/.config/cyberterm/themes/<name>/`, each with its license, rather than built into the binary. Running `install` again updates a collection.
+
+**The picker (`Ctrl+Shift+,`):**
+- **Finding a theme:** type to filter by name or family, with themes grouped under their family.
+- **Previewing:** the whole window previews the highlighted theme, with a sample of output in its colors.
+- **Choosing:** Enter applies it and saves it, Esc goes back to the theme you had, and Ctrl+N creates a new one.
+- **Elsewhere:** the command palette (`Ctrl+Shift+P`) lists every theme too.
+
+**Your own themes:**
+- **Kitty-format files:** any `.conf` file works unmodified, at the top of the themes folder or in a folder of its own (which becomes its family).
+- **JSON:** `+edit-theme` writes your own themes as JSON under a `category/folder/` layout.
+
+**The shared Cybercore catalog:**
+- **Colors:** its eight semantic colors fill the terminal's normal ANSI slots, and Cyberterm derives the bright eight (lighter on dark themes, deeper on light ones).
+- **Your choice applies everywhere:** choosing a Cybercore theme saves it to the shared catalog, so other Cybercore apps follow.
+- **And the other way round:** Cyberterm checks the catalog once a second, so changes from Theme Studio or another Cybercore app apply without a restart.
 
 ## ⚙️ Rendering
 
