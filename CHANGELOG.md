@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-10-10
+
+**The agent workspace:** run any coding agent in its own worktree, see what it does as it works, and review what it changed.
 
 ### Added
 - **Agent sessions** (`cyberterm +agent <name> [task]`, or **New agent** in the command palette): run any coding agent in its own git worktree and tab.
@@ -19,6 +21,9 @@
   - **What it shows:** commits, uncommitted work and new files, as files with `+`/`−` counts and a diff with line numbers; it refreshes while the agent works.
   - **Keys:** **e** opens a file at its first change; **r** reverts it, after asking.
 - **Desktop notifications from programs** (OSC 9 and OSC 777) are understood. An agent sending one shows as needing you.
+
+### Fixed
+- An unknown `+command` (for example, run with an older cyberterm on PATH) opened a window as if it worked; it now says so and exits.
 
 ## 0.2.1 — 2026-10-10
 
