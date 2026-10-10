@@ -22,7 +22,6 @@ mod mcp;
 mod mux;
 mod procs;
 mod renderer;
-mod renderer_images;
 mod rewind;
 mod session;
 mod shell;

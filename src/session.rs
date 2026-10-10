@@ -109,8 +109,6 @@ pub struct Session {
     pid: u32,
     /// Recent output, for rewind.
     pub rewind: Arc<Mutex<crate::rewind::Recorder>>,
-    /// Inline images its programs sent (kitty graphics).
-    pub images: Arc<Mutex<crate::graphics::Images>>,
 }
 
 /// Where the shell actually runs.
@@ -183,11 +181,7 @@ impl Session {
         let pid = pty.child().id();
         let shell = Arc::new(Mutex::new(ShellState::default()));
         let rewind = Arc::new(Mutex::new(crate::rewind::Recorder::new(opts.size)));
-        let images = Arc::new(Mutex::new(crate::graphics::Images::default()));
-        images.lock().cell = (opts.cell_width.max(1.0), opts.cell_height.max(1.0));
-        let pty = TappedPty::new(pty, shell.clone())?
-            .with_graphics(images.clone())?
-            .with_recorder(rewind.clone());
+        let pty = TappedPty::new(pty, shell.clone())?.with_recorder(rewind.clone());
         let event_loop = PtyEventLoop::new(term.clone(), listener, pty, true, false)?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
@@ -199,7 +193,6 @@ impl Session {
             size: opts.size,
             pid,
             rewind,
-            images,
         })
     }
 
@@ -210,7 +203,7 @@ impl Session {
         client: Arc<crate::mux::client::DaemonClient>,
         size: GridSize,
     ) -> Option<Self> {
-        let (term, shell, pid, rewind, images) = client.replica(pane)?;
+        let (term, shell, pid, rewind) = client.replica(pane)?;
         Some(Self {
             term,
             shell,
@@ -222,7 +215,6 @@ impl Session {
             size,
             pid,
             rewind,
-            images,
         })
     }
 
