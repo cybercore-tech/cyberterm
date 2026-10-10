@@ -390,7 +390,7 @@ pub fn run(target: AttachTarget, config: &CyberConfig) -> io::Result<()> {
 
 impl Client {
     fn adopt(&mut self, id: PaneId, title: String) {
-        if let Some((term, shell, pid)) = self.daemon.replica(id) {
+        if let Some((term, shell, pid, _)) = self.daemon.replica(id) {
             self.panes.insert(
                 id,
                 PaneState {

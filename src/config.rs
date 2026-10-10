@@ -37,6 +37,7 @@ pub struct CyberConfig {
     pub ai: AiConfig,
     pub danger: DangerConfig,
     pub ports: PortsConfig,
+    pub rewind: RewindConfig,
     pub blocks: BlocksConfig,
     pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
@@ -69,6 +70,7 @@ impl Default for CyberConfig {
             ai: AiConfig::default(),
             danger: DangerConfig::default(),
             ports: PortsConfig::default(),
+            rewind: RewindConfig::default(),
             blocks: BlocksConfig::default(),
             links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
@@ -463,6 +465,24 @@ impl Default for AgentsConfig {
             read: AgentPolicy::Ask,
             write: AgentPolicy::Ask,
             audit_log: true,
+        }
+    }
+}
+
+/// Rewind: each pane records recent output to step back through.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct RewindConfig {
+    pub enabled: bool,
+    /// Output kept per pane, in KiB (the oldest is folded away).
+    pub buffer_kb: usize,
+}
+
+impl Default for RewindConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            buffer_kb: 2048,
         }
     }
 }

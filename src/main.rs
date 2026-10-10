@@ -21,6 +21,7 @@ mod mcp;
 mod mux;
 mod procs;
 mod renderer;
+mod rewind;
 mod session;
 mod shell;
 mod theme;

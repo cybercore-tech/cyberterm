@@ -53,6 +53,7 @@ mod input;
 mod overlays;
 mod panes;
 mod ports;
+mod rewind;
 mod ssh;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
@@ -146,6 +147,7 @@ enum MenuAction {
     RevokeAgents(PaneId),
     SplitLocal(crate::layout::Direction),
     OpenPort(u16),
+    Rewind,
     Explain(blocks::BlockRef, shell::BlockMeta),
 }
 
@@ -230,6 +232,8 @@ pub struct App {
     danger_confirm: Option<danger::DangerConfirm>,
     /// Port chips as last drawn, for clicks.
     port_hits: ports::PortHits,
+    /// Rewind view of a pane (Ctrl+Shift+U).
+    rewind: Option<rewind::RewindUi>,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -287,6 +291,7 @@ impl App {
         let (bindings, errors) =
             Bindings::new(&config.keybindings, config.keyboard.leader.as_deref());
         report_config_errors(&errors);
+        rewind::apply_rewind_config(&config.rewind);
         let mut app = Self {
             proxy,
             gpu: None,
@@ -314,6 +319,7 @@ impl App {
             ai_seq: 0,
             danger_confirm: None,
             port_hits: Default::default(),
+            rewind: None,
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -519,6 +525,7 @@ impl App {
 
     fn apply_config(&mut self, new: CyberConfig) {
         let old = std::mem::replace(&mut self.config, new);
+        rewind::apply_rewind_config(&self.config.rewind);
         let (bindings, errors) = Bindings::new(
             &self.config.keybindings,
             self.config.keyboard.leader.as_deref(),
@@ -762,12 +769,12 @@ impl App {
                 .filter(|_| focused)
                 .map(|h| (h.row, h.cols.clone()))
                 .collect();
-            let history_frame = if focused {
-                let size = pane.session.size();
-                self.draw_history(size.cols, size.rows)
-            } else {
-                None
-            };
+            let size = pane.session.size();
+            let history_frame = self.draw_rewind(pane.id, size.cols, size.rows).or_else(|| {
+                focused
+                    .then(|| self.draw_history(size.cols, size.rows))
+                    .flatten()
+            });
             let mut frame = if let Some(f) = history_frame {
                 f
             } else if focused && self.theme_menu.is_open {

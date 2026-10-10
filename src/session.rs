@@ -107,6 +107,8 @@ pub struct Session {
     size: GridSize,
     /// The shell's process id, for the `/proc` working-directory fallback.
     pid: u32,
+    /// Recent output, for rewind.
+    pub rewind: Arc<Mutex<crate::rewind::Recorder>>,
 }
 
 /// Where the shell actually runs.
@@ -178,7 +180,8 @@ impl Session {
 
         let pid = pty.child().id();
         let shell = Arc::new(Mutex::new(ShellState::default()));
-        let pty = TappedPty::new(pty, shell.clone())?;
+        let rewind = Arc::new(Mutex::new(crate::rewind::Recorder::new(opts.size)));
+        let pty = TappedPty::new(pty, shell.clone())?.with_recorder(rewind.clone());
         let event_loop = PtyEventLoop::new(term.clone(), listener, pty, true, false)?;
         let notifier = Notifier(event_loop.channel());
         event_loop.spawn();
@@ -189,6 +192,7 @@ impl Session {
             backend: Backend::Local(notifier),
             size: opts.size,
             pid,
+            rewind,
         })
     }
 
@@ -199,7 +203,7 @@ impl Session {
         client: Arc<crate::mux::client::DaemonClient>,
         size: GridSize,
     ) -> Option<Self> {
-        let (term, shell, pid) = client.replica(pane)?;
+        let (term, shell, pid, rewind) = client.replica(pane)?;
         Some(Self {
             term,
             shell,
@@ -210,6 +214,7 @@ impl Session {
             },
             size,
             pid,
+            rewind,
         })
     }
 
@@ -272,6 +277,7 @@ impl Session {
                 }
                 self.size = size;
                 self.term.lock().resize(size);
+                self.rewind.lock().resize(size);
                 notifier.on_resize(ws);
             }
             Backend::Remote { pane, client, cell } => {
@@ -284,6 +290,7 @@ impl Session {
                 self.size = size;
                 *cell = new_cell;
                 self.term.lock().resize(size);
+                self.rewind.lock().resize(size);
                 let _ = client.send(&crate::mux::protocol::ClientMsg::Resize {
                     pane: *pane,
                     size: crate::mux::protocol::Size {

@@ -27,6 +27,11 @@ impl App {
             return;
         }
 
+        if self.rewind_open() {
+            self.rewind_key(&event);
+            return;
+        }
+
         if self.ai_open() {
             self.ai_key(&event);
             return;
@@ -188,6 +193,7 @@ impl App {
             Action::AskAi => self.ai_ask(),
             Action::ExplainError => self.ai_explain_last(),
             Action::ToggleDanger => self.toggle_danger(),
+            Action::Rewind => self.toggle_rewind(),
         }
         self.request_redraw();
     }
@@ -856,6 +862,12 @@ impl App {
                 MenuAction::OpenPort(*port),
             );
         }
+        add(
+            "Rewind…",
+            self.bindings.hint(Action::Rewind),
+            true,
+            MenuAction::Rewind,
+        );
         if in_ssh {
             add(
                 "Split Right (Local Shell)",
@@ -972,6 +984,7 @@ impl App {
             MenuAction::RevokeAgents(pane) => self.revoke_agents(pane),
             MenuAction::SplitLocal(dir) => self.split_local(dir),
             MenuAction::OpenPort(port) => self.open_port(port),
+            MenuAction::Rewind => self.toggle_rewind(),
             MenuAction::Explain(block, meta) => self.ai_explain(block, &meta),
         }
     }
