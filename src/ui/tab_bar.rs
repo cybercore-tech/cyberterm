@@ -18,6 +18,9 @@ pub struct TabLabel {
     pub broadcast: bool,
     /// A pane in this tab is in danger mode.
     pub danger: bool,
+    /// An agent session's state mark ("◆", "◆!", "✓") and whether it
+    /// needs attention.
+    pub agent: Option<(&'static str, bool)>,
 }
 
 pub struct Colors {
@@ -66,6 +69,10 @@ pub fn build(labels: &[TabLabel], cols: usize, status: Option<&str>, colors: &Co
         if label.broadcast {
             text.push_str(" (b)");
         }
+        if let Some((mark, _)) = label.agent {
+            text.push(' ');
+            text.push_str(mark);
+        }
         if label.bell && !label.active {
             text.push_str(" •");
         }
@@ -74,7 +81,7 @@ pub fn build(labels: &[TabLabel], cols: usize, status: Option<&str>, colors: &Co
             (colors.bg, colors.alert)
         } else if label.active {
             (colors.bg, colors.accent)
-        } else if label.danger || label.bell {
+        } else if label.danger || label.bell || label.agent.is_some_and(|a| a.1) {
             (colors.alert, colors.bg)
         } else {
             (colors.dim, colors.bg)
@@ -155,7 +162,23 @@ mod tests {
             zoomed: false,
             broadcast: false,
             danger: false,
+            agent: None,
         }
+    }
+
+    #[test]
+    fn agent_tabs_carry_their_state() {
+        let mut waiting = label("claude", false);
+        waiting.agent = Some(("◆!", true));
+        let mut done = label("codex", false);
+        done.agent = Some(("✓", false));
+        let bar = build(&[label("api", true), waiting, done], 60, None, &colors());
+        let t = text(&bar);
+        assert!(t.contains(" 2 claude ◆! "), "{t}");
+        assert!(t.contains(" 3 codex ✓ "), "{t}");
+        // The one that needs you is drawn in the alert color.
+        let col = t.find("claude").unwrap();
+        assert_eq!(bar.frame.cells[col].fg, [255, 0, 0]);
     }
 
     fn text(bar: &TabBar) -> String {

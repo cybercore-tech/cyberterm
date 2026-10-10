@@ -51,7 +51,10 @@ impl App {
         let Some(gpu) = &self.gpu else {
             return Err(std::io::Error::other("no window yet"));
         };
-        let (_, area) = self.areas(gpu);
+        let area = match self.active() {
+            Some(tab) => self.tab_area(gpu, tab.id),
+            None => self.areas(gpu).1,
+        };
         let (cols, rows) = gpu.renderer.grid_size(area.w, area.h);
         let (cw, ch) = gpu.renderer.cell_size();
         let size = GridSize { cols, rows };
@@ -427,7 +430,7 @@ impl App {
         if tab.zoomed {
             return None;
         }
-        let (_, area) = self.areas(gpu);
+        let area = self.tab_area(gpu, tab.id);
         let slack = 3.0;
         tab.root
             .dividers(area, self.gap(gpu))

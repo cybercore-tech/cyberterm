@@ -855,6 +855,7 @@ fn start(name: &str, rest: &[String], cfg: &AgentsConfig) -> i32 {
             "cwd": session.dir,
             "title": session.title(),
             "command": run_command(&session.id),
+            "flight_log": true,
         });
         match crate::control::call(&socket, "new_tab", params) {
             Ok(resp) if resp.error.is_none() => {

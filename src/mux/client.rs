@@ -79,6 +79,7 @@ fn shell_state(info: &super::protocol::ShellInfo) -> ShellState {
         command_running: info.command_running,
         prompts: info.prompts,
         blocks: info.blocks.iter().cloned().collect(),
+        notice: info.notice.clone(),
     }
 }
 

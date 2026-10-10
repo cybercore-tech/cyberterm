@@ -386,6 +386,9 @@ impl App {
                 tab.title = Some(title.to_string());
             }
         }
+        if p.get("flight_log").and_then(Value::as_bool) == Some(true) {
+            self.open_flight_panel();
+        }
         self.run_in(id, opt_str(p, "command")?);
         let tab = self.active().map(|t| t.id);
         Ok(json!({ "tab": tab, "pane": id }))

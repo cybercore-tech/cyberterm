@@ -89,6 +89,7 @@ cyberterm +agent <name> [task]     # run a coding agent in its own worktree and 
 | `Ctrl+Shift+H` | Search command history (commands and their output) |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Bigger / smaller / reset font |
 | `Ctrl+Shift+,` | Theme picker |
+| `Ctrl+Shift+L` | Flight log: what the agent in this tab did |
 | `Ctrl+Shift+R` | Reload the config now |
 
 Rebind or free any of them under `[keybindings]` (`"ctrl+shift+k" = "none"`
@@ -329,6 +330,18 @@ cyberterm +agent log                    # the latest session
 cyberterm +agent log fix-the-flaky-login -o -f   # with output, following live
 ```
 
+**In the window,** the Flight log sits beside the agent's tab. It opens by itself when an agent starts, and `Ctrl+Shift+L` opens it, gives it the keyboard, or closes it.
+
+- **Beside the agent, not over it:** the agent's panes really shrink, so it always sees its true width.
+- **Where it stands:** working, **needs you**, done or stopped, with counts of commands, failures and edits.
+- **What it did:** prompts, commands with ✓/✗ and how long they took, edits and other tools, newest at the bottom.
+  - A failed command shows its last line of output.
+  - With the keyboard: **↑↓** select, **Enter** opens a command's output, **y** copies it, **Esc** hands the keyboard back.
+- **On the tab:** `◆` working, `◆!` needs you (in the alert color), `✓` done.
+- **A desktop notification** says when an agent you're not looking at needs you or has finished.
+- **Where "needs you" comes from:** the agent's hooks, or a desktop notification it sends through the terminal (OSC 9 or OSC 777, which Codex and others use).
+- **After the agent quits,** the tab keeps its log.
+
 It works with any agent, at the level of detail each one allows:
 
 | Source | Agents | What it records |
@@ -354,6 +367,8 @@ worktrees = true        # false: agents run in the current directory
 worktree_dir = ""       # empty: next to the repository
 record_commands = true  # the shell recorder
 hooks = true            # agents' own hooks (Claude Code)
+panel = true            # open the Flight log by itself for new agents
+panel_width = 0         # columns; 0 sizes it to the window
 
 [agents.launch.aider]
 command = "aider --model sonnet"

@@ -187,6 +187,7 @@ fn shell_info(s: &ShellState) -> ShellInfo {
         command_running: s.command_running,
         prompts: s.prompts,
         blocks: s.blocks.iter().cloned().collect(),
+        notice: s.notice.clone(),
     }
 }
 
