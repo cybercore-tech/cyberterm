@@ -244,6 +244,12 @@ impl Session {
         }
     }
 
+    /// The shell's process id (in the daemon's PID namespace -- the same
+    /// machine -- for daemon panes).
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
     /// The shell's current directory. The kernel's view (Linux `/proc`) is
     /// always current; shell integration's OSC 7 report lags behind a
     /// command that `cd`s and keeps running, so it's the fallback.

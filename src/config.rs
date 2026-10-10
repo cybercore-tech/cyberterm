@@ -35,6 +35,7 @@ pub struct CyberConfig {
     pub notify: NotifyConfig,
     pub agents: AgentsConfig,
     pub ai: AiConfig,
+    pub danger: DangerConfig,
     pub blocks: BlocksConfig,
     pub links: LinksConfig,
     /// `"ctrl+shift+c" = "copy"` style overrides layered on top of the
@@ -65,6 +66,7 @@ impl Default for CyberConfig {
             notify: NotifyConfig::default(),
             agents: AgentsConfig::default(),
             ai: AiConfig::default(),
+            danger: DangerConfig::default(),
             blocks: BlocksConfig::default(),
             links: LinksConfig::default(),
             keybindings: BTreeMap::new(),
@@ -455,6 +457,39 @@ impl Default for AgentsConfig {
             read: AgentPolicy::Ask,
             write: AgentPolicy::Ask,
             audit_log: true,
+        }
+    }
+}
+
+/// Danger mode: panes on production hosts or running as root turn red, and
+/// risky commands typed there ask before they run.
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[serde(default)]
+pub struct DangerConfig {
+    pub enabled: bool,
+    /// SSH destinations that count as dangerous (wildcards, any case).
+    pub hosts: Vec<String>,
+    /// A root shell (sudo -i, su) counts as dangerous.
+    pub root: bool,
+    /// Working directories that count as dangerous (`~/` allowed).
+    pub paths: Vec<String>,
+    /// Which commands need a second Enter in a dangerous pane: "dangerous"
+    /// (recursive deletes, force-push, DROP TABLE, ...), "caution" (also
+    /// sudo, overwrites, kills) or "off".
+    pub confirm: String,
+    /// How strongly a dangerous pane is tinted red (0 to 0.3).
+    pub tint: f32,
+}
+
+impl Default for DangerConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            hosts: vec!["*prod*".into()],
+            root: true,
+            paths: Vec::new(),
+            confirm: "dangerous".into(),
+            tint: 0.06,
         }
     }
 }

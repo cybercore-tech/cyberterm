@@ -228,6 +228,7 @@ impl App {
                     "shell_integration": shell.prompts > 0,
                     "command_running": shell.command_running,
                     "last_exit": shell.last_exit,
+                    "danger": pane.danger,
                 }));
             }
         }

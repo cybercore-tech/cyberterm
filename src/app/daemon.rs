@@ -108,6 +108,8 @@ impl App {
                     // detached.
                     notified_mark: info.shell.blocks.iter().map(|b| b.mark).max().unwrap_or(0),
                     block_sig: (0, None),
+                    danger: None,
+                    danger_manual: None,
                 });
             }
         }

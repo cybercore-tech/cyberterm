@@ -16,6 +16,8 @@ pub struct TabLabel {
     pub bell: bool,
     pub zoomed: bool,
     pub broadcast: bool,
+    /// A pane in this tab is in danger mode.
+    pub danger: bool,
 }
 
 pub struct Colors {
@@ -53,7 +55,11 @@ pub fn build(labels: &[TabLabel], cols: usize, status: Option<&str>, colors: &Co
             title.pop();
             title.push('…');
         }
-        let mut text = format!(" {} {title}", index + 1);
+        let mut text = if label.danger {
+            format!(" ⚠ {} {title}", index + 1)
+        } else {
+            format!(" {} {title}", index + 1)
+        };
         if label.zoomed {
             text.push_str(" (z)");
         }
@@ -64,9 +70,11 @@ pub fn build(labels: &[TabLabel], cols: usize, status: Option<&str>, colors: &Co
             text.push_str(" •");
         }
         text.push(' ');
-        let (fg, bg) = if label.active {
+        let (fg, bg) = if label.active && label.danger {
+            (colors.bg, colors.alert)
+        } else if label.active {
             (colors.bg, colors.accent)
-        } else if label.bell {
+        } else if label.danger || label.bell {
             (colors.alert, colors.bg)
         } else {
             (colors.dim, colors.bg)
@@ -146,6 +154,7 @@ mod tests {
             bell: false,
             zoomed: false,
             broadcast: false,
+            danger: false,
         }
     }
 

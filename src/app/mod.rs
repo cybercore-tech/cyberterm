@@ -47,6 +47,7 @@ mod ai;
 mod blocks;
 mod control;
 mod daemon;
+mod danger;
 pub use daemon::AttachTarget;
 mod input;
 mod overlays;
@@ -101,6 +102,10 @@ struct Pane {
     /// (block count, newest finish time) last seen, to skip the block scan
     /// when nothing changed.
     block_sig: (usize, Option<u64>),
+    /// Why this pane is in danger mode (`ssh prod-db`, `root`), if it is.
+    danger: Option<String>,
+    /// Set by hand (Ctrl+Shift+D): forced on or off.
+    danger_manual: Option<bool>,
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -215,6 +220,8 @@ pub struct App {
     /// The AI panel (Ask / Explain), and the last request number.
     ai_panel: Option<ai::AiPanel>,
     ai_seq: u64,
+    /// An Enter held back in a dangerous pane, waiting for a second one.
+    danger_confirm: Option<danger::DangerConfirm>,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -297,6 +304,7 @@ impl App {
             agents: agents::AgentState::default(),
             ai_panel: None,
             ai_seq: 0,
+            danger_confirm: None,
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -695,6 +703,7 @@ impl App {
                     .any(|id| self.pane(*id).is_some_and(|p| p.bell_unseen)),
                 zoomed: t.zoomed,
                 broadcast: t.broadcast,
+                danger: self.tab_in_danger(t),
             })
             .collect()
     }
@@ -810,15 +819,18 @@ impl App {
             let overlay_open = focused && (self.theme_menu.is_open || self.history_ui.is_some());
             if !overlay_open {
                 self.decorate_blocks(pane, &mut frame, rect, &mut list.overlays);
+                self.danger_overlays(pane, rect, &mut list.overlays);
                 if focused {
                     self.draw_find(&mut frame);
                 }
             }
-            self.draw_agent_badge(pane.id, &mut frame);
+            let used = self.draw_danger_badge(pane, &mut frame);
+            self.draw_agent_badge(pane.id, &mut frame, used);
             if self.ai_panel_pane() == Some(pane.id) {
                 self.draw_ai(&mut frame);
             }
             if focused {
+                self.draw_danger_confirm(&mut frame);
                 self.draw_consent(&mut frame);
             }
             list.panes.push((rect, frame, flash, dim));
@@ -1301,6 +1313,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.last_poll = now;
             self.poll_shared_theme();
             self.reload_config(false);
+            self.refresh_danger();
         }
         let mut next = self.last_poll + POLL_INTERVAL;
 
