@@ -12,6 +12,7 @@ mod config;
 mod control;
 mod danger;
 mod find;
+mod flight_log;
 mod frame;
 mod fuzzy;
 mod graphics;
@@ -40,6 +41,12 @@ use theme::ThemeRegistry;
 use winit::event_loop::EventLoop;
 
 fn main() {
+    // Agent hooks run on every tool call: skip the start-up work below.
+    let mut args = std::env::args();
+    if args.nth(1).as_deref() == Some("+hook") {
+        flight_log::run_hook(&args.collect::<Vec<_>>());
+        return;
+    }
     let themes_dir = match config::initialize_cyberterm_directories() {
         Ok(base_path) => base_path.join("themes"),
         Err(e) => {

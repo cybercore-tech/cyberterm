@@ -76,6 +76,17 @@ pub struct Launcher {
     pub prompt: Prompt,
 }
 
+/// Native reporting an agent supports, beyond the shell recorder
+/// (src/flight_log.rs). Chosen by the program it runs, so a custom
+/// `[agents.launch]` entry for `claude --model opus` gets it too.
+pub fn adapter(argv: &[String]) -> Option<&'static str> {
+    let program = Path::new(argv.first()?).file_name()?.to_str()?;
+    match program {
+        "claude" => Some("claude"),
+        _ => None,
+    }
+}
+
 /// The agents that can be started here: those in [agents.launch], then
 /// the known ones found on PATH. A config entry with a known name
 /// overrides it.
@@ -260,9 +271,11 @@ pub struct Worktree {
 }
 
 impl Session {
-    /// The agent's command line, with the task added the way it takes one.
-    pub fn command(&self) -> Vec<String> {
+    /// The agent's command line with `extra` options, and the task added
+    /// the way it takes one.
+    fn command_with(&self, extra: &[String]) -> Vec<String> {
         let mut argv = self.argv.clone();
+        argv.extend(extra.iter().cloned());
         if let Some(task) = self.task.as_ref().filter(|t| !t.trim().is_empty()) {
             match &self.prompt {
                 Prompt::Positional => argv.push(task.clone()),
@@ -467,8 +480,9 @@ fn create_in(state: &Path, cfg: &AgentsConfig, req: Request<'_>) -> Result<Sessi
 }
 
 /// Runs a session's agent in this process (`+agent run <id>`): changes to
-/// its directory, marks the environment, and replaces itself with it.
-pub fn exec(id: &str) -> Result<std::convert::Infallible, String> {
+/// its directory, marks the environment, turns on the flight log, and
+/// replaces itself with it.
+pub fn exec(id: &str, cfg: &AgentsConfig) -> Result<std::convert::Infallible, String> {
     use std::os::unix::process::CommandExt;
     let s = load(id)?;
     if !s.dir.is_dir() {
@@ -480,19 +494,45 @@ pub fn exec(id: &str) -> Result<std::convert::Infallible, String> {
     if let (Prompt::None, Some(task)) = (&s.prompt, &s.task) {
         println!("\x1b[1mTask:\x1b[0m {task}\n");
     }
-    let argv = s.command();
-    let err = Command::new(&argv[0])
-        .args(&argv[1..])
+    let log = crate::flight_log::log_path(&s.id);
+    let mut extra = Vec::new();
+    if cfg.hooks && adapter(&s.argv) == Some("claude") {
+        let hook = format!("{} +hook claude", self_path());
+        extra.push("--settings".to_string());
+        extra.push(crate::flight_log::claude_settings(&hook));
+    }
+    let argv = s.command_with(&extra);
+    let mut cmd = Command::new(&argv[0]);
+    cmd.args(&argv[1..])
         .current_dir(&s.dir)
         .env("CYBERTERM_AGENT_ID", &s.id)
-        .env("CYBERTERM_AGENT", &s.agent)
-        .exec();
+        .env("CYBERTERM_AGENT", &s.agent);
+    if cfg.record_commands {
+        match crate::flight_log::recorder_env(&log) {
+            Ok(env) => {
+                cmd.envs(env);
+            }
+            Err(e) => eprintln!("cyberterm: flight log off ({e})"),
+        }
+    }
+    let err = cmd.exec();
     Err(format!("couldn't start {}: {err}", argv[0]))
 }
 
 /// The command a tab types to start a session.
 pub fn run_command(id: &str) -> String {
     format!("{} +agent run {}", self_command(), shell_quote(id))
+}
+
+/// This binary's full path, quoted for a shell (for hooks, which may run
+/// with another PATH).
+fn self_path() -> String {
+    let exe = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.canonicalize().ok())
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "cyberterm".into());
+    shell_quote(&exe)
 }
 
 /// How to call this binary from a shell: `cyberterm` when that's the one
@@ -684,6 +724,8 @@ cyberterm +agent: run any coding agent in a worktree of its own
       --no-worktree                      run it in this directory instead
       --here                             run it in this terminal, not a new tab
   cyberterm +agent list                  sessions: running, changed files, commits
+  cyberterm +agent log [id] [-o] [-f]    what it did: prompts, commands, edits
+                                         (-o with output, -f keep following)
   cyberterm +agent rm <id> [--force]     remove a session and its worktree
                                          (--force: even with changes or commits)
 
@@ -712,13 +754,31 @@ pub fn run_cli(args: &[String], cfg: &AgentsConfig) -> i32 {
                 eprintln!("usage: cyberterm +agent run <id>");
                 return 2;
             };
-            match exec(id) {
+            match exec(id, cfg) {
                 Ok(never) => match never {},
                 Err(e) => {
                     eprintln!("cyberterm +agent: {e}");
                     1
                 }
             }
+        }
+        Some("log") => {
+            let follow = args.iter().any(|a| a == "-f" || a == "--follow");
+            let output = args.iter().any(|a| a == "-o" || a == "--output");
+            let id = args[1..].iter().find(|a| !a.starts_with('-')).cloned();
+            let id = match id.or_else(|| sessions().first().map(|s| s.id.clone())) {
+                Some(id) => id,
+                None => {
+                    eprintln!("No agent sessions yet.");
+                    return 1;
+                }
+            };
+            if let Err(e) = load(&id) {
+                eprintln!("❌ {e}");
+                return 1;
+            }
+            show_log(&id, output, follow);
+            0
         }
         Some("rm" | "remove") => {
             let force = args.iter().any(|a| a == "--force" || a == "-f");
@@ -808,12 +868,38 @@ fn start(name: &str, rest: &[String], cfg: &AgentsConfig) -> i32 {
             Err(e) => eprintln!("couldn't reach Cyberterm ({e}); running it here"),
         }
     }
-    match exec(&session.id) {
+    match exec(&session.id, cfg) {
         Ok(never) => match never {},
         Err(e) => {
             eprintln!("❌ {e}");
             1
         }
+    }
+}
+
+/// Prints a session's flight log; with `follow`, keeps printing new
+/// entries until interrupted.
+fn show_log(id: &str, output: bool, follow: bool) {
+    use std::io::IsTerminal;
+    let path = crate::flight_log::log_path(id);
+    let color = std::io::stdout().is_terminal();
+    let mut shown = 0;
+    loop {
+        let entries = crate::flight_log::timeline(&crate::flight_log::read(&path));
+        // Entries already shown can still change (a command finishing),
+        // so in follow mode the last few are reprinted when they do.
+        if entries.len() > shown || !follow {
+            let new = &entries[shown.min(entries.len())..];
+            print!("{}", crate::flight_log::render(new, output, color));
+            shown = entries.len();
+        }
+        if !follow {
+            if entries.is_empty() {
+                println!("Nothing recorded for {id} yet.");
+            }
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
 
@@ -910,14 +996,14 @@ mod tests {
             worktree: None,
             created_ms: 0,
         };
-        assert_eq!(s.command(), vec!["a", "--yolo", "do it"]);
+        assert_eq!(s.command_with(&[]), vec!["a", "--yolo", "do it"]);
         s.prompt = Prompt::Flag("-i".into());
-        assert_eq!(s.command(), vec!["a", "--yolo", "-i", "do it"]);
+        assert_eq!(s.command_with(&[]), vec!["a", "--yolo", "-i", "do it"]);
         s.prompt = Prompt::None;
-        assert_eq!(s.command(), vec!["a", "--yolo"]);
+        assert_eq!(s.command_with(&[]), vec!["a", "--yolo"]);
         s.task = None;
         s.prompt = Prompt::Positional;
-        assert_eq!(s.command(), vec!["a", "--yolo"]);
+        assert_eq!(s.command_with(&[]), vec!["a", "--yolo"]);
     }
 
     #[test]

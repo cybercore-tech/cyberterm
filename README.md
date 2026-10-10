@@ -320,10 +320,40 @@ cyberterm +agent rm fix-the-flaky-login            # remove it and its worktree 
   - This works for daemon sessions too: close the window and the agent keeps working, and reattaching picks it back up.
 - **Careful cleanup:** `+agent rm` refuses while the agent runs or while its worktree has uncommitted changes or commits (`--force` overrides). It deletes the branch only when nothing was committed on it.
 
+#### Flight log
+
+Every agent session keeps a flight log: the prompts it was given, the commands it ran (exit code, duration and, where the agent reports it, output), the files it edited, and when it waited for you or finished.
+
+```bash
+cyberterm +agent log                    # the latest session
+cyberterm +agent log fix-the-flaky-login -o -f   # with output, following live
+```
+
+It works with any agent, at the level of detail each one allows:
+
+| Source | Agents | What it records |
+|---|---|---|
+| Shell recorder | any agent that runs commands through `bash` or `zsh` (most do) | every command: text, directory, exit code, duration |
+| Native hooks | Claude Code (more to come) | prompts, command output, edits, other tools, waiting / done |
+| Open format | anything: another agent's hooks, a plugin, a wrapper script | whatever it sends |
+
+- **The shell recorder** turns on through `BASH_ENV` and `ZDOTDIR` for the agent only. Your own startup files still run exactly as before (your `BASH_ENV`, `.zshenv`, `.zprofile`, `.zshrc`, `.zlogin` and `ZDOTDIR`). Commands run through `sh -c` aren't recorded.
+- **Claude Code's hooks** are added for that session only (`--settings`); your Claude configuration isn't touched.
+- **The open format** is one JSON object per line on the stdin of `cyberterm +hook event`, inside an agent session (or with `--session <id>`):
+
+  ```bash
+  echo '{"kind":"command","command":"pytest -x","exit":1,"duration_ms":4200,"output":"1 failed"}' | cyberterm +hook event
+  ```
+
+  The kinds are `prompt` (`text`), `command_start` and `command` (`id`, `command`, `cwd`, `exit`, `duration_ms`, `output`), `edit` (`path`, `tool`), `tool` (`tool`, `text`), `waiting` (`text`), `done`, `session_start` and `session_end`.
+- **Storage:** logs live next to the sessions in `~/.local/state/cyberterm/agents/<id>.jsonl`. `+hook` never fails the agent that calls it.
+
 ```toml
 [agents]
 worktrees = true        # false: agents run in the current directory
 worktree_dir = ""       # empty: next to the repository
+record_commands = true  # the shell recorder
+hooks = true            # agents' own hooks (Claude Code)
 
 [agents.launch.aider]
 command = "aider --model sonnet"

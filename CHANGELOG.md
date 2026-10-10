@@ -7,6 +7,10 @@
   - The agents on your PATH are found automatically (Claude Code, Codex, Copilot, Gemini CLI, Cursor Agent, opencode, Crush and more), and anything else can be added under `[agents.launch]`.
   - Agent tabs are titled and badged, including in daemon sessions.
   - `+agent list` shows each session's state; `+agent rm` cleans up without losing work.
+- **Flight log** (`cyberterm +agent log [id] [-o] [-f]`): what an agent session did, including prompts, commands with exit codes, durations and output, edits, and waiting/done.
+  - **Any agent:** a shell recorder covers any agent that uses bash or zsh.
+  - **Native hooks:** Claude Code gets hooks for its session only.
+  - **Open format:** `cyberterm +hook event` takes events from anything else.
 
 ## 0.2.1 — 2026-10-10
 
