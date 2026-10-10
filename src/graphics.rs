@@ -26,6 +26,9 @@
 // animation, Unicode-placeholder placements, z-index (images are drawn
 // over text).
 
+// `as_chunks` needs Rust 1.88; `chunks_exact` keeps older toolchains working.
+#![allow(clippy::chunks_exact_to_as_chunks)]
+
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -628,7 +631,9 @@ mod tests {
         base64::engine::general_purpose::STANDARD.encode(d)
     }
 
-    fn tap() -> (GraphicsTap, Arc<Mutex<Images>>, Arc<Mutex<Vec<u8>>>) {
+    type Replies = Arc<Mutex<Vec<u8>>>;
+
+    fn tap() -> (GraphicsTap, Arc<Mutex<Images>>, Replies) {
         let images = Arc::new(Mutex::new(Images::default()));
         images.lock().cell = (10.0, 20.0);
         let replies = Arc::new(Mutex::new(Vec::new()));
