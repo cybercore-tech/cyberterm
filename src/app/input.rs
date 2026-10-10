@@ -735,6 +735,7 @@ impl App {
             .is_some_and(|t| !t.is_empty());
 
         let b_hint_explain = self.bindings.hint(Action::ExplainError);
+        let in_ssh = self.config.splits.follow_ssh && self.ssh_follow_command().is_some();
         let agent_pane = Some(self.focused).filter(|&p| self.pane_has_agent(p));
         let mut items = Vec::new();
         let mut add = |label: &str, hint: String, enabled: bool, action: MenuAction| {
@@ -834,6 +835,20 @@ impl App {
                 String::new(),
                 has_previous && !meta.running(),
                 MenuAction::Diff(block, meta.clone()),
+            );
+        }
+        if in_ssh {
+            add(
+                "Split Right (Local Shell)",
+                String::new(),
+                true,
+                MenuAction::SplitLocal(crate::layout::Direction::Right),
+            );
+            add(
+                "Split Down (Local Shell)",
+                String::new(),
+                true,
+                MenuAction::SplitLocal(crate::layout::Direction::Down),
             );
         }
         if let Some(pane) = agent_pane {
@@ -936,6 +951,7 @@ impl App {
             MenuAction::Diff(block, meta) => self.diff_with_previous(block, &meta),
             MenuAction::ViewJson(block) => self.view_json(block),
             MenuAction::RevokeAgents(pane) => self.revoke_agents(pane),
+            MenuAction::SplitLocal(dir) => self.split_local(dir),
             MenuAction::Explain(block, meta) => self.ai_explain(block, &meta),
         }
     }

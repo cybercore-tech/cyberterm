@@ -67,6 +67,7 @@ fn grid(size: Size) -> GridSize {
 fn shell_state(info: &super::protocol::ShellInfo) -> ShellState {
     ShellState {
         cwd: info.cwd.clone(),
+        remote_cwd: info.remote_cwd.clone(),
         last_exit: info.last_exit,
         command_running: info.command_running,
         prompts: info.prompts,

@@ -352,6 +352,10 @@ impl Default for TabsConfig {
 pub struct SplitsConfig {
     /// How much to dim panes that don't have focus, 0.0 (off) - 1.0.
     pub inactive_dim: f32,
+    /// Splitting a pane that's in an interactive `ssh` session opens the
+    /// new pane on the same host (and directory, when the remote shell
+    /// reports it).
+    pub follow_ssh: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
@@ -570,7 +574,10 @@ impl Default for ControlConfig {
 
 impl Default for SplitsConfig {
     fn default() -> Self {
-        Self { inactive_dim: 0.25 }
+        Self {
+            inactive_dim: 0.25,
+            follow_ssh: true,
+        }
     }
 }
 

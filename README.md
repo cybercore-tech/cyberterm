@@ -314,6 +314,24 @@ If you press Enter on a risky command there, Cyberterm holds the Enter and shows
 
 Detection reads `/proc` once a second, so `ssh prod-db` and `exit` change the pane's state on their own. AI agents see a pane's danger state in `list_panes`, and their consent prompts flag a dangerous target.
 
+### SSH-aware splits
+
+Splitting a pane that's in an `ssh` session opens the new pane on the same host, with the same options (`-p`, `-i`, `-J` and so on).
+- **Remote directory:** if the remote shell reports its directory (OSC 7, which Cyberterm's shell integration or many distros' default bash config send), the new pane also opens in that directory.
+- **Local shell underneath:** the new pane is a local shell with the `ssh` command typed into it, so the command is in your history and you're back in a local shell when you exit.
+- **Local split instead:** right-click → **Split Right/Down (Local Shell)**, or set `[splits] follow_ssh = false` to turn this off.
+- **Not followed:** sessions that aren't logins, such as `ssh host cmd`, `-N` forwarding, `-f` and `-W`.
+
+Each pane is its own connection. To log in only once, let new panes share the first connection with an SSH ControlMaster:
+
+```
+# ~/.ssh/config
+Host *
+  ControlMaster auto
+  ControlPath ~/.ssh/cm-%C
+  ControlPersist 10m
+```
+
 ## 🐚 Shell integration
 
 ```bash

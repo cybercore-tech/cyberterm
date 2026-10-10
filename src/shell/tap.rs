@@ -36,6 +36,10 @@ pub const MARK_SCHEME: &str = "cyberterm-mark:";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ShellState {
     pub cwd: Option<PathBuf>,
+    /// The directory a shell on another machine reported (OSC 7 with a
+    /// foreign host -- a remote shell with integration, over SSH), as
+    /// (host, path). Cleared when the local shell reports again.
+    pub remote_cwd: Option<(String, PathBuf)>,
     pub last_exit: Option<i32>,
     pub command_running: bool,
     /// Prompts drawn so far; non-zero means shell integration is active.
@@ -214,8 +218,13 @@ impl OscTap {
         let mut shell = self.shell.lock();
 
         if let Some(url) = text.strip_prefix("7;") {
-            if let Some(path) = parse_file_url(url) {
-                shell.cwd = Some(path);
+            if let Some((host, path)) = parse_file_url(url) {
+                if is_local_host(&host) {
+                    shell.cwd = Some(path);
+                    shell.remote_cwd = None;
+                } else {
+                    shell.remote_cwd = Some((host, path));
+                }
             }
             return;
         }
@@ -286,13 +295,30 @@ impl OscTap {
     }
 }
 
-/// `file://host/some%20path` -> `/some path`. The host is ignored: a
-/// remote shell's directory isn't a local path, but the cwd is still
-/// worth showing, and Phase 1's SSH-aware panes will need it.
-fn parse_file_url(url: &str) -> Option<PathBuf> {
+/// `file://host/some%20path` -> (`host`, `/some path`).
+fn parse_file_url(url: &str) -> Option<(String, PathBuf)> {
     let rest = url.strip_prefix("file://")?;
-    let path = &rest[rest.find('/')?..];
-    Some(PathBuf::from(percent_decode(path)))
+    let slash = rest.find('/')?;
+    let host = percent_decode(&rest[..slash]);
+    Some((host, PathBuf::from(percent_decode(&rest[slash..]))))
+}
+
+/// An OSC 7 host that means this machine: empty, localhost, or our
+/// hostname (with or without its domain).
+fn is_local_host(host: &str) -> bool {
+    use std::sync::OnceLock;
+    static NAME: OnceLock<String> = OnceLock::new();
+    let name = NAME.get_or_init(|| {
+        std::fs::read_to_string("/proc/sys/kernel/hostname")
+            .map(|h| h.trim().to_lowercase())
+            .unwrap_or_default()
+    });
+    let host = host.to_lowercase();
+    let short = |h: &str| h.split('.').next().unwrap_or_default().to_string();
+    host.is_empty()
+        || host == "localhost"
+        || host == *name
+        || (!name.is_empty() && short(&host) == short(name))
 }
 
 fn percent_decode(s: &str) -> String {
@@ -437,9 +463,26 @@ mod tests {
 
     #[test]
     fn osc7_sets_cwd_and_is_swallowed() {
-        let (out, state) = run(&[b"a\x1b]7;file://box/home/raven/My%20Dir\x07b"]);
+        let (out, state) = run(&[b"a\x1b]7;file://localhost/home/raven/My%20Dir\x07b"]);
         assert_eq!(out, b"ab".to_vec());
         assert_eq!(state.cwd, Some(PathBuf::from("/home/raven/My Dir")));
+        assert_eq!(state.remote_cwd, None);
+    }
+
+    #[test]
+    fn osc7_from_another_host_is_a_remote_cwd() {
+        let (_, state) = run(&[
+            b"\x1b]7;file:///home/me\x07",
+            b"\x1b]7;file://web1.prod.example/srv/app\x07",
+        ]);
+        assert_eq!(state.cwd, Some(PathBuf::from("/home/me")));
+        assert_eq!(
+            state.remote_cwd,
+            Some(("web1.prod.example".into(), PathBuf::from("/srv/app")))
+        );
+        // Back home: the local shell reports again.
+        let (_, state) = run(&[b"\x1b]7;file://web1/srv\x07", b"\x1b]7;file:///home/me\x07"]);
+        assert_eq!(state.remote_cwd, None);
     }
 
     #[test]
@@ -459,7 +502,7 @@ mod tests {
     #[test]
     fn blocks_record_command_cwd_timing_and_exit() {
         let (_, state) = run(&[
-            b"\x1b]7;file://h/srv\x07\x1b]133;A\x07$ \x1b]133;B\x07",
+            b"\x1b]7;file:///srv\x07\x1b]133;A\x07$ \x1b]133;B\x07",
             b"\x1b]133;C;cmdline_url=make%20test\x07out\x1b]133;D;3\x07",
             b"\x1b]133;A\x07$ \x1b]133;B\x07",
         ]);
@@ -482,7 +525,7 @@ mod tests {
             b"3;D;1",
             b"\x1b",
             b"\\y\x1b]7;file:",
-            b"//h/tmp\x1b\\",
+            b"//localhost/tmp\x1b\\",
         ]);
         assert_eq!(out, b"xy".to_vec());
         assert_eq!(state.last_exit, Some(1));

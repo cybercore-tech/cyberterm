@@ -81,6 +81,9 @@ bar = "auto"
 [splits]
 # Dim panes that don't have focus: 0.0 (off) to 1.0.
 inactive_dim = 0.25
+# Splitting a pane that's in an SSH session opens the new pane on the same
+# host (right-click offers a local split instead).
+follow_ssh = true
 
 [control]
 # A user-only Unix socket for `cyberterm +ctl` and scripts (list, read,
