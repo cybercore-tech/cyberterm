@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Agent sessions** (`cyberterm +agent <name> [task]`, or **New agent** in the command palette): run any coding agent in its own git worktree and tab.
+  - The agents on your PATH are found automatically (Claude Code, Codex, Copilot, Gemini CLI, Cursor Agent, opencode, Crush and more), and anything else can be added under `[agents.launch]`.
+  - Agent tabs are titled and badged, including in daemon sessions.
+  - `+agent list` shows each session's state; `+agent rm` cleans up without losing work.
+
 ## 0.2.1 — 2026-10-10
 
 ### Added

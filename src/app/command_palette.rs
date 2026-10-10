@@ -23,6 +23,7 @@ pub(super) enum Target {
     Tab(usize),
     Theme(String),
     History(String),
+    Agent(String),
 }
 
 #[derive(Clone, Debug)]
@@ -76,6 +77,14 @@ impl App {
                 label: (*description).to_string(),
                 hint: self.bindings.hint(*action),
                 target: Target::Action(*action),
+            });
+        }
+        for l in crate::agent::launchers(&self.config.agents) {
+            items.push(Item {
+                kind: "agent",
+                label: format!("New agent: {}", l.label),
+                hint: String::new(),
+                target: Target::Agent(l.name),
             });
         }
         for name in self.lua_command_names() {
@@ -279,6 +288,7 @@ impl App {
                 }
             }
             Target::Pane(id) => self.focus_pane(id),
+            Target::Agent(name) => self.start_agent(&name),
             Target::Tab(index) => self.activate_tab(index),
             Target::Theme(name) => {
                 if let Some(theme) = self

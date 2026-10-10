@@ -112,6 +112,7 @@ impl App {
                     danger: None,
                     danger_manual: None,
                     ports: Vec::new(),
+                    agent: None,
                 });
             }
         }
