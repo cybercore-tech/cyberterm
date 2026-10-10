@@ -89,6 +89,8 @@ impl App {
             pending_command: None,
             notified_mark: 0,
             block_sig: (0, None),
+            danger: None,
+            danger_manual: None,
         });
         Ok(id)
     }

@@ -125,6 +125,19 @@ write = "ask"
 # Log every agent request to ~/.local/state/cyberterm/agents.log.
 audit_log = true
 
+[danger]
+# Panes connected to a matching SSH host, running a root shell or sitting
+# in a matching directory get a red border, tint and badge, and a risky
+# command typed there needs a second Enter. Ctrl+Shift+D marks or unmarks
+# a pane by hand.
+enabled = true
+hosts = ["*prod*"]
+root = true
+paths = []
+# "dangerous", "caution" (stricter) or "off".
+confirm = "dangerous"
+tint = 0.06
+
 [ai]
 # Explain this error (failed command's menu, Ctrl+Shift+J) and plain
 # English to a command (Ctrl+Shift+I). Suggested commands are only typed at

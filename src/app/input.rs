@@ -16,6 +16,11 @@ impl App {
             (ElementState::Pressed, false) => KeyState::Press,
         };
 
+        if self.danger_confirm_open() {
+            self.danger_confirm_key(&event);
+            return;
+        }
+
         // An agent's consent prompt takes every key until it's answered.
         if self.consent_pending() {
             self.consent_key(&event);
@@ -98,7 +103,11 @@ impl App {
         let Some(bytes) = keyboard::encode(&input, self.mods, KeyMode::from_term(mode)) else {
             return;
         };
-        for id in self.input_targets() {
+        let targets = self.input_targets();
+        if state == KeyState::Press && self.danger_hold(&targets, &event.logical_key, &bytes) {
+            return;
+        }
+        for id in targets {
             if let Some(pane) = self.pane(id) {
                 if state != KeyState::Release {
                     pane.session.term.lock().scroll_display(Scroll::Bottom);
@@ -178,6 +187,7 @@ impl App {
             Action::ShowLastOutput => self.show_last_output(),
             Action::AskAi => self.ai_ask(),
             Action::ExplainError => self.ai_explain_last(),
+            Action::ToggleDanger => self.toggle_danger(),
         }
         self.request_redraw();
     }

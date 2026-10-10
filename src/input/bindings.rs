@@ -61,6 +61,7 @@ pub enum Action {
     HistorySearch,
     AskAi,
     ExplainError,
+    ToggleDanger,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -270,6 +271,11 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "explain_error",
         "Ask AI to explain the last failed command",
     ),
+    (
+        Action::ToggleDanger,
+        "toggle_danger",
+        "Mark or unmark the pane as dangerous (red, confirms risky commands)",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -340,6 +346,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+h", "history_search"),
     ("ctrl+shift+i", "ask_ai"),
     ("ctrl+shift+j", "explain_error"),
+    ("ctrl+shift+d", "toggle_danger"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

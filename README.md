@@ -295,6 +295,25 @@ provider = "anthropic"                   # key in ANTHROPIC_API_KEY; model defau
 
 Before anything is sent, command output is redacted (tokens, passwords and keys are stripped, as in saved history) and trimmed to the last 12,000 characters (`max_context_chars`). The panel header shows which model and host it goes to.
 
+## 🛡 Power features
+
+### Danger mode
+
+A pane turns red when a mistake there would cost more:
+- it's connected over SSH to a host matching `[danger] hosts` (default `*prod*`);
+- it's running a root shell (`sudo -i`, `su`);
+- it's sitting in a directory matching `[danger] paths`;
+- or you marked it with **Ctrl+Shift+D** (press again to unmark).
+
+A dangerous pane gets a red border, a faint red tint, a `⚠ ssh prod-db` badge and a `⚠` on its tab.
+
+If you press Enter on a risky command there, Cyberterm holds the Enter and shows the command with the reason (for example "deletes recursively", "force-pushes"). Enter again runs it, and any other key cancels.
+- **What counts as risky:** the same check the AI panel uses. `confirm = "caution"` also covers sudo, overwrites and kills; `"off"` turns the check off.
+- **Programs that take over the screen:** full-screen programs such as editors and pagers are left alone.
+- **Over SSH:** it works without shell integration on the remote side.
+
+Detection reads `/proc` once a second, so `ssh prod-db` and `exit` change the pane's state on their own. AI agents see a pane's danger state in `list_panes`, and their consent prompts flag a dangerous target.
+
 ## 🐚 Shell integration
 
 ```bash

@@ -416,7 +416,8 @@ impl App {
 
     /// The badge in a pane's bottom-right corner while an agent works with
     /// it (recent activity or a standing grant).
-    pub(super) fn draw_agent_badge(&self, pane: PaneId, frame: &mut Frame) {
+    /// `right` columns at the right edge are taken (the danger badge).
+    pub(super) fn draw_agent_badge(&self, pane: PaneId, frame: &mut Frame, right: usize) {
         let a = &self.agents;
         let recent = a
             .seen
@@ -434,13 +435,13 @@ impl App {
         };
         let text = format!(" ◆ {} ", clip(&name, 20));
         let width = text.chars().count();
-        if frame.rows == 0 || frame.cols < width + 2 {
+        if frame.rows == 0 || frame.cols < width + right + 2 {
             return;
         }
         let bg = frame::hex_to_rgb(self.palette.ansi[5]);
         let fg = frame::hex_to_rgb(self.palette.bg);
         // Bottom-right: the top-right corner is where block badges sit.
-        frame.put(frame.rows - 1, frame.cols - width, &text, fg, bg);
+        frame.put(frame.rows - 1, frame.cols - width - right, &text, fg, bg);
     }
 
     /// The prompt for the oldest pending request, over the bottom rows of
@@ -465,6 +466,9 @@ impl App {
             }
             if !pane.title.is_empty() {
                 s.push_str(&format!(" · {}", clip(&pane.title, 40)));
+            }
+            if let Some(reason) = &pane.danger {
+                s.push_str(&format!(" · ⚠ DANGEROUS ({reason})"));
             }
             s
         };
