@@ -110,7 +110,6 @@ impl App {
                     block_sig: (0, None),
                     danger: None,
                     danger_manual: None,
-                    ports: Vec::new(),
                 });
             }
         }
