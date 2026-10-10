@@ -96,7 +96,7 @@ impl App {
     }
 
     /// Directory for a new pane: wherever the focused pane's shell is.
-    fn inherited_cwd(&self) -> Option<PathBuf> {
+    pub(super) fn inherited_cwd(&self) -> Option<PathBuf> {
         self.focused_pane().and_then(|p| p.session.cwd())
     }
 
@@ -114,13 +114,6 @@ impl App {
         let cwd = self.inherited_cwd();
         if let Err(e) = self.open_tab(cwd) {
             eprintln!("cyberterm: couldn't open a tab: {e}");
-        }
-    }
-
-    pub(super) fn split(&mut self, dir: Direction) {
-        let cwd = self.inherited_cwd();
-        if let Err(e) = self.split_with(dir, cwd).map(|_| ()) {
-            eprintln!("cyberterm: couldn't split: {e}");
         }
     }
 

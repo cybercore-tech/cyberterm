@@ -152,6 +152,9 @@ pub struct ShellInfo {
     /// Command blocks (see `shell::BlockMeta`), so windows can draw them.
     #[serde(default)]
     pub blocks: Vec<crate::shell::BlockMeta>,
+    /// A remote shell's reported (host, directory), for SSH-aware splits.
+    #[serde(default)]
+    pub remote_cwd: Option<(String, PathBuf)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

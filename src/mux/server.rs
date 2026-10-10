@@ -182,6 +182,7 @@ fn clone_frame(frame: &Frame) -> Frame {
 fn shell_info(s: &ShellState) -> ShellInfo {
     ShellInfo {
         cwd: s.cwd.clone(),
+        remote_cwd: s.remote_cwd.clone(),
         last_exit: s.last_exit,
         command_running: s.command_running,
         prompts: s.prompts,

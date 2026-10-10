@@ -52,6 +52,7 @@ pub use daemon::AttachTarget;
 mod input;
 mod overlays;
 mod panes;
+mod ssh;
 
 const DOUBLE_CLICK: Duration = Duration::from_millis(400);
 const BELL_FLASH: Duration = Duration::from_millis(150);
@@ -140,6 +141,7 @@ enum MenuAction {
     Diff(blocks::BlockRef, crate::shell::BlockMeta),
     ViewJson(blocks::BlockRef),
     RevokeAgents(PaneId),
+    SplitLocal(crate::layout::Direction),
     Explain(blocks::BlockRef, shell::BlockMeta),
 }
 
