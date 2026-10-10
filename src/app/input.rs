@@ -87,6 +87,13 @@ impl App {
             self.request_redraw();
             return;
         } else if state != KeyState::Release {
+            if state == KeyState::Press {
+                if let Some(i) = self.lua_binding(&event.logical_key, &base, self.mods) {
+                    self.suppressed.insert(event.physical_key);
+                    self.lua_run_binding(i);
+                    return;
+                }
+            }
             if let Some(action) = self.bindings.lookup(&event.logical_key, &base, self.mods) {
                 self.suppressed.insert(event.physical_key);
                 self.perform(action);

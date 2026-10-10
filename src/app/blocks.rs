@@ -367,6 +367,26 @@ impl App {
             recorder.record(records);
         }
 
+        // Lua: commands that started since last time.
+        let started: Vec<BlockMeta> = {
+            let pane = &self.panes[index];
+            let shell = pane.session.shell.lock();
+            shell
+                .blocks
+                .iter()
+                .filter(|b| b.mark > pane.started_mark && b.is_command() && b.started_ms.is_some())
+                .cloned()
+                .collect()
+        };
+        if let Some(newest) = started.iter().map(|b| b.mark).max() {
+            let id = self.panes[index].id;
+            self.panes[index].started_mark = newest;
+            for b in &started {
+                self.lua_emit("command_started", block_event(id, b));
+            }
+        }
+        let pane = &self.panes[index];
+
         let threshold = self.config.notify.long_command_seconds;
         let finished: Vec<BlockMeta> = {
             let shell = pane.session.shell.lock();
@@ -384,6 +404,9 @@ impl App {
         };
         let (id, seen) = (pane.id, self.pane_in_view(pane.id));
         self.panes[index].notified_mark = newest;
+        for b in &finished {
+            self.lua_emit("command_finished", block_event(id, b));
+        }
         if threshold == 0 || seen {
             return;
         }
@@ -401,6 +424,19 @@ impl App {
 }
 
 /// `$XDG_RUNTIME_DIR/cyberterm/block-<pid>-<pane>-<mark>-{a,b}.txt`.
+/// A command block as a Lua event.
+fn block_event(pane: PaneId, b: &BlockMeta) -> serde_json::Value {
+    serde_json::json!({
+        "pane": pane,
+        "command": b.command,
+        "cwd": b.cwd,
+        "exit": b.exit,
+        "started_ms": b.started_ms,
+        "finished_ms": b.finished_ms,
+        "duration_ms": b.duration_ms(),
+    })
+}
+
 fn write_temp_pair(block: BlockRef, a: &str, b: &str) -> Option<(PathBuf, PathBuf)> {
     let dir = crate::control::prepare_socket_dir().ok()?;
     let stem = format!("block-{}-{}-{}", std::process::id(), block.pane, block.mark);

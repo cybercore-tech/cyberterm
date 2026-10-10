@@ -376,6 +376,55 @@ Start a dev server (`npm run dev`, `cargo run`, `python -m http.server`) and a `
 - **Who else sees them:** `list_panes` reports them too, so scripts and AI agents can find your dev server.
 - **Settings:** `[ports] url` changes what a click opens.
 
+## 🌙 Lua scripting
+
+Put a script in `~/.config/cyberterm/init.lua`. It runs in an embedded Lua 5.4, with no system Lua needed, and reloads as soon as you save it.
+
+```lua
+-- Tell me when a command fails, with its first line of output.
+cyberterm.on("command_finished", function(ev)
+  if ev.exit ~= 0 then
+    local first = ev.output():match("[^\n]+") or ""
+    cyberterm.status(("✗ %s exited %d: %s"):format(ev.command, ev.exit, first))
+  end
+end)
+
+-- A long build finished while I was elsewhere: desktop notification.
+cyberterm.on("command_finished", function(ev)
+  if ev.duration_ms and ev.duration_ms > 60000 then
+    cyberterm.notify("Done: " .. ev.command, "exit " .. tostring(ev.exit))
+  end
+end)
+
+-- Ctrl+Alt+G: lazygit in a split below.
+cyberterm.bind("ctrl+alt+g", function()
+  cyberterm.split{ direction = "down", command = "lazygit" }
+end)
+
+-- `cyberterm +ctl lua name=dev` opens my dev layout.
+cyberterm.command("dev", function()
+  cyberterm.new_tab{ title = "server", command = "npm run dev" }
+  cyberterm.split{ direction = "right", command = "npm test -- --watch" }
+end)
+```
+
+| API | |
+|---|---|
+| `cyberterm.on(event, fn)` | `startup`, `pane_created`, `focus_changed`, `command_started`, `command_finished`. Command events carry `pane`, `command`, `cwd`, `exit`, `duration_ms`, and `output()` (fetched on demand). |
+| `cyberterm.bind(keys, fn)` | A key combo (same syntax as `[keybindings]`) runs `fn`. Script bindings take precedence over the built-in ones. |
+| `cyberterm.command(name, fn)` | Run with `cyberterm +ctl lua name=… args='[…]'`; the return value is printed. |
+| `cyberterm.after(ms, fn)` | Run `fn` once, later. |
+| `panes()`, `focused()`, `tabs()`, `get_text(pane, lines)`, `blocks(pane, n, output)`, `history(query)` | Read the terminal. |
+| `send_text(pane, text)`, `paste(pane, text)`, `split{…}`, `new_tab{…}`, `focus(pane)`, `close(pane)`, `set_title(text)` | Act on it. |
+| `status(text)`, `notify(title, body)`, `copy(text)`, `log(…)` | Messages, notifications, clipboard, `~/.local/state/cyberterm/lua.log`. |
+| `call(method, params)` | Any control-socket method (`cyberterm +ctl help`). |
+
+**Safety:**
+- **Runaway scripts:** a script that runs longer than 2 seconds is stopped and the window keeps working.
+- **Errors:** they show in red along the bottom of the pane, with the line number, and go to `lua.log`.
+- **AI agents:** they can't run Lua.
+- **Turning it off:** `[lua] enabled = false`; `script` points at a different file.
+
 ## 🐚 Shell integration
 
 ```bash
