@@ -174,11 +174,17 @@ impl App {
             .enumerate()
             .filter_map(|(i, item)| {
                 let (mut score, pos) = fuzzy(&p.query, &item.label)?;
-                // Long history lines match almost anything loosely: only
-                // keep fairly compact matches there.
-                if item.kind == "history" && pos.len() > 1 {
+                // History lines and the (possibly 1,500) themes match almost
+                // anything loosely: only keep fairly compact matches there.
+                // The match is checked past the "Theme: " prefix.
+                if matches!(item.kind, "history" | "theme") && pos.len() > 1 {
                     let span = pos[pos.len() - 1] - pos[0] + 1;
-                    if span > (pos.len() * 3).max(8) {
+                    let limit = if item.kind == "theme" {
+                        pos.len() * 2 + 2
+                    } else {
+                        (pos.len() * 3).max(8)
+                    };
+                    if span > limit {
                         return None;
                     }
                 }
