@@ -155,6 +155,9 @@ pub struct ShellInfo {
     /// A remote shell's reported (host, directory), for SSH-aware splits.
     #[serde(default)]
     pub remote_cwd: Option<(String, PathBuf)>,
+    /// The latest desktop notification (OSC 9/777), for agent tabs.
+    #[serde(default)]
+    pub notice: Option<(u64, String)>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

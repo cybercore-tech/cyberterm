@@ -242,6 +242,7 @@ pub struct App {
     history_ui: Option<overlays::HistoryUi>,
     /// AI agents' pending consent prompts, grants and badges.
     agents: agents::AgentState,
+    flight: agent_tabs::FlightState,
     /// The AI panel (Ask / Explain), and the last request number.
     ai_panel: Option<ai::AiPanel>,
     ai_seq: u64,
@@ -337,6 +338,7 @@ impl App {
             find: None,
             history_ui: None,
             agents: agents::AgentState::default(),
+            flight: agent_tabs::FlightState::default(),
             ai_panel: None,
             ai_seq: 0,
             danger_confirm: None,
@@ -506,11 +508,11 @@ impl App {
     /// size they'll be shown at.
     fn relayout(&mut self) {
         let Some(gpu) = &self.gpu else { return };
-        let (_, area) = self.areas(gpu);
         let gap = self.gap(gpu);
         let (cw, ch) = gpu.renderer.cell_size();
         let mut sizes = Vec::new();
         for tab in &self.tabs {
+            let area = self.tab_area(gpu, tab.id);
             for (id, rect) in tab.visible(area, gap) {
                 let (cols, rows) = gpu.renderer.grid_size(rect.w, rect.h);
                 sizes.push((id, rect, GridSize { cols, rows }));
@@ -754,6 +756,7 @@ impl App {
                 zoomed: t.zoomed,
                 broadcast: t.broadcast,
                 danger: self.tab_in_danger(t),
+                agent: self.agent_tab_mark(t.id),
             })
             .collect()
     }
@@ -902,7 +905,7 @@ impl App {
         // Dividers: a one-pixel line in the middle of each gap, in the
         // accent color while broadcasting.
         if let Some(tab) = tab.filter(|t| !t.zoomed) {
-            let (_, area) = self.areas(gpu);
+            let area = self.tab_area(gpu, tab.id);
             let line = (gpu.window.scale_factor() as f32).round().max(1.0);
             let color = if tab.broadcast { accent } else { dim_color };
             for d in tab.root.dividers(area, self.gap(gpu)) {
@@ -926,6 +929,8 @@ impl App {
                 });
             }
         }
+
+        self.draw_flight_panel(gpu, &mut list);
 
         let status = self.leader_pending.then_some("LEADER");
         let (bar_rect, area) = self.areas(gpu);

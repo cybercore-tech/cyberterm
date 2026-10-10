@@ -684,11 +684,70 @@ pub fn timeline(events: &[Event]) -> Vec<Entry> {
     out
 }
 
+/// Where a session stands, from its timeline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum State {
+    /// Nothing recorded yet.
+    Idle,
+    Working,
+    /// Asked for you (a permission, a question) and hasn't moved since.
+    Waiting,
+    /// Finished its turn.
+    Done,
+}
+
+/// A session at a glance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Summary {
+    pub state: State,
+    pub commands: usize,
+    pub failed: usize,
+    pub edits: usize,
+    /// When the latest entry happened.
+    pub last_t: u64,
+}
+
+pub fn summary(entries: &[Entry]) -> Summary {
+    let failed = |e: &Entry| matches!(e, Entry::Command { exit, failed, .. } if *failed || exit.is_some_and(|c| c != 0));
+    let state = match entries.last() {
+        None => State::Idle,
+        Some(Entry::Waiting { .. }) => State::Waiting,
+        Some(Entry::Done { .. }) => State::Done,
+        Some(_) => State::Working,
+    };
+    Summary {
+        state,
+        commands: entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Command { .. }))
+            .count(),
+        failed: entries.iter().filter(|e| failed(e)).count(),
+        edits: entries
+            .iter()
+            .filter(|e| matches!(e, Entry::Edit { .. }))
+            .count(),
+        last_t: entries.last().map(Entry::t).unwrap_or(0),
+    }
+}
+
+impl Entry {
+    pub fn t(&self) -> u64 {
+        match self {
+            Entry::Prompt { t, .. }
+            | Entry::Command { t, .. }
+            | Entry::Edit { t, .. }
+            | Entry::Tool { t, .. }
+            | Entry::Waiting { t, .. }
+            | Entry::Done { t } => *t,
+        }
+    }
+}
+
 // ----------------------------------------------------------------------
 // `cyberterm +agent log`
 // ----------------------------------------------------------------------
 
-fn clock(t: u64) -> String {
+pub fn clock(t: u64) -> String {
     // Local time of day, from the C library (no time zone crate here).
     let secs = (t / 1000) as libc::time_t;
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
@@ -1020,6 +1079,39 @@ mod tests {
         if let Some(events) = recorded("bash", "-c", "bash -c true") {
             assert_eq!(ended(&events).len(), 1);
         }
+    }
+
+    #[test]
+    fn summaries_count_and_tell_the_state() {
+        let cmd = |exit: i32| Entry::Command {
+            t: 1,
+            command: "x".into(),
+            cwd: None,
+            exit: Some(exit),
+            failed: false,
+            duration_ms: None,
+            output: None,
+            running: false,
+        };
+        assert_eq!(summary(&[]).state, State::Idle);
+        let s = summary(&[
+            cmd(0),
+            cmd(2),
+            Entry::Edit {
+                t: 5,
+                path: "a".into(),
+                tool: None,
+            },
+        ]);
+        assert_eq!(
+            (s.state, s.commands, s.failed, s.edits, s.last_t),
+            (State::Working, 2, 1, 1, 5)
+        );
+        assert_eq!(
+            summary(&[cmd(0), Entry::Waiting { t: 2, text: None }]).state,
+            State::Waiting
+        );
+        assert_eq!(summary(&[cmd(0), Entry::Done { t: 2 }]).state, State::Done);
     }
 
     #[test]

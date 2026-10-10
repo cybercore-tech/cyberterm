@@ -11,6 +11,11 @@
   - **Any agent:** a shell recorder covers any agent that uses bash or zsh.
   - **Native hooks:** Claude Code gets hooks for its session only.
   - **Open format:** `cyberterm +hook event` takes events from anything else.
+- **Flight log panel** (`Ctrl+Shift+L`): the log beside the agent's tab, opening by itself for new agents.
+  - **Live state:** working, needs you, done or stopped, with counts and the timeline; failed commands show their last output line, and Enter opens a command's output.
+  - **Tab marks:** `◆` working, `◆!` needs you, `✓` done.
+  - **Notifications:** a desktop notification when an agent you're not looking at needs you or has finished.
+- **Desktop notifications from programs** (OSC 9 and OSC 777) are understood. An agent sending one shows as needing you.
 
 ## 0.2.1 — 2026-10-10
 

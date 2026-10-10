@@ -48,6 +48,10 @@ pub struct ShellState {
     /// prompt's mark on the grid. Prompts that never ran a command (an
     /// empty Enter, a redraw) have no `command`.
     pub blocks: VecDeque<BlockMeta>,
+    /// The latest desktop notification a program asked for (OSC 9 /
+    /// OSC 777;notify), as (ms since the epoch, text). Coding agents send
+    /// these when they need you.
+    pub notice: Option<(u64, String)>,
 }
 
 /// What shell integration said about one command.
@@ -123,7 +127,7 @@ pub struct OscTap {
     shell: Arc<Mutex<ShellState>>,
 }
 
-const OURS: [&[u8]; 2] = [b"133;", b"7;"];
+const OURS: [&[u8]; 4] = [b"133;", b"7;", b"9;", b"777;"];
 
 impl OscTap {
     pub fn new(shell: Arc<Mutex<ShellState>>) -> Self {
@@ -226,6 +230,34 @@ impl OscTap {
                     shell.remote_cwd = Some((host, path));
                 }
             }
+            return;
+        }
+
+        // Desktop notifications: OSC 9;<text> (iTerm2; ConEmu uses
+        // `9;<digit>;...` for other things) and OSC 777;notify;<title>;<body>.
+        let notice = match text.strip_prefix("9;") {
+            Some(t) if !t.starts_with(|c: char| c.is_ascii_digit()) => Some(t.to_string()),
+            Some(_) => return,
+            None => match text.strip_prefix("777;") {
+                Some(rest) => {
+                    let mut parts = rest.splitn(3, ';');
+                    if parts.next() != Some("notify") {
+                        return;
+                    }
+                    let title = parts.next().unwrap_or_default();
+                    let body = parts.next().unwrap_or_default();
+                    Some(match (title.is_empty(), body.is_empty()) {
+                        (false, false) => format!("{title}: {body}"),
+                        (true, _) => body.to_string(),
+                        (_, true) => title.to_string(),
+                    })
+                }
+                None => None,
+            },
+        };
+        if let Some(notice) = notice {
+            let notice: String = notice.chars().take(300).collect();
+            shell.notice = Some((now_ms(), notice));
             return;
         }
 
@@ -587,13 +619,27 @@ mod tests {
     }
 
     #[test]
+    fn desktop_notifications_are_recorded_and_swallowed() {
+        let (out, state) = run(&[b"a\x1b]9;Claude needs your input\x07b"]);
+        assert_eq!(out, b"ab".to_vec());
+        assert_eq!(
+            state.notice.map(|n| n.1).as_deref(),
+            Some("Claude needs your input")
+        );
+        let (out, state) = run(&[b"\x1b]777;notify;Codex;", b"Approve the command?\x1b\\"]);
+        assert!(out.is_empty());
+        assert_eq!(
+            state.notice.map(|n| n.1).as_deref(),
+            Some("Codex: Approve the command?")
+        );
+        // ConEmu's OSC 9;4 (progress) isn't a notification.
+        let (_, state) = run(&[b"\x1b]9;4;1;50\x07"]);
+        assert_eq!(state.notice, None);
+    }
+
+    #[test]
     fn similar_but_foreign_osc_codes_pass_through() {
-        for input in [
-            &b"\x1b]1337;foo\x07"[..],
-            b"\x1b]777;notify;a;b\x07",
-            b"\x1b]13\x07",
-            b"\x1b]7\x1b[m",
-        ] {
+        for input in [&b"\x1b]1337;foo\x07"[..], b"\x1b]13\x07", b"\x1b]7\x1b[m"] {
             assert_eq!(run(&[input]).0, input.to_vec(), "{input:?}");
         }
     }

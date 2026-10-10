@@ -54,6 +54,9 @@ impl App {
             self.history_key(&event);
             return;
         }
+        if self.flight.focused && self.flight_key(&event) {
+            return;
+        }
         if self.find.is_some() && self.find_key(&event) {
             return;
         }
@@ -207,6 +210,7 @@ impl App {
             Action::ToggleDanger => self.toggle_danger(),
             Action::Rewind => self.toggle_rewind(),
             Action::CommandPalette => self.toggle_command_palette(),
+            Action::FlightLog => self.toggle_flight_log(),
         }
         self.request_redraw();
     }

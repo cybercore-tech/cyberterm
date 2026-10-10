@@ -469,6 +469,10 @@ pub struct AgentsConfig {
     /// Use agents' own hooks where Cyberterm knows them (Claude Code), for
     /// prompts, output and edits.
     pub hooks: bool,
+    /// Open the Flight log panel by itself beside a new agent.
+    pub panel: bool,
+    /// The panel's width in columns; 0 sizes it to the window.
+    pub panel_width: usize,
     /// Agents to offer besides the known ones found on PATH, or overrides
     /// for them (`[agents.launch.<name>]`).
     pub launch: std::collections::BTreeMap<String, AgentLaunch>,
@@ -499,6 +503,8 @@ impl Default for AgentsConfig {
             worktree_dir: String::new(),
             record_commands: true,
             hooks: true,
+            panel: true,
+            panel_width: 0,
             launch: Default::default(),
         }
     }

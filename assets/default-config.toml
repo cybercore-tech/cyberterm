@@ -140,6 +140,10 @@ worktree_dir = ""
 # Cyberterm knows them (Claude Code) for prompts, output and edits.
 record_commands = true
 hooks = true
+# The Flight log panel (Ctrl+Shift+L) beside an agent's tab: open it by
+# itself for new agents; its width in columns (0 sizes it to the window).
+panel = true
+panel_width = 0
 # Other agents, or changes to a known one:
 # [agents.launch.mine]
 # command = "my-agent --flag"
