@@ -542,6 +542,13 @@ impl App {
             return;
         }
 
+        if pressed && button == MouseButton::Left {
+            if let Some(port) = self.port_chip_at(row, col) {
+                self.open_port(port);
+                return;
+            }
+        }
+
         let report_button = match button {
             MouseButton::Left => mouse::Button::Left,
             MouseButton::Middle => mouse::Button::Middle,

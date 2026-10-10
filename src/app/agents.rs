@@ -431,7 +431,7 @@ impl App {
             .find(|(_, p)| *p == pane)
             .map(|(name, _)| name.clone());
         let Some(name) = recent.or(granted) else {
-            return;
+            return 0;
         };
         let text = format!(" ◆ {} ", clip(&name, 20));
         let width = text.chars().count();
