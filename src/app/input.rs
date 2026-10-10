@@ -742,10 +742,6 @@ impl App {
             .is_some_and(|t| !t.is_empty());
 
         let b_hint_explain = self.bindings.hint(Action::ExplainError);
-        let focused_ports = self
-            .focused_pane()
-            .map(|p| p.ports.clone())
-            .unwrap_or_default();
         let in_ssh = self.config.splits.follow_ssh && self.ssh_follow_command().is_some();
         let agent_pane = Some(self.focused).filter(|&p| self.pane_has_agent(p));
         let mut items = Vec::new();
@@ -846,14 +842,6 @@ impl App {
                 String::new(),
                 has_previous && !meta.running(),
                 MenuAction::Diff(block, meta.clone()),
-            );
-        }
-        for port in focused_ports.iter().take(4) {
-            add(
-                &format!("Open localhost:{port}"),
-                String::new(),
-                true,
-                MenuAction::OpenPort(*port),
             );
         }
         if in_ssh {
@@ -971,7 +959,6 @@ impl App {
             MenuAction::ViewJson(block) => self.view_json(block),
             MenuAction::RevokeAgents(pane) => self.revoke_agents(pane),
             MenuAction::SplitLocal(dir) => self.split_local(dir),
-            MenuAction::OpenPort(port) => self.open_port(port),
             MenuAction::Explain(block, meta) => self.ai_explain(block, &meta),
         }
     }

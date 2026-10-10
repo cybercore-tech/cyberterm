@@ -128,12 +128,6 @@ write = "ask"
 # Log every agent request to ~/.local/state/cyberterm/agents.log.
 audit_log = true
 
-[ports]
-# Show the TCP ports a pane's programs listen on (a dev server, say) as
-# chips in its corner; click one to open it.
-enabled = true
-url = "http://localhost:{port}"
-
 [danger]
 # Panes connected to a matching SSH host, running a root shell or sitting
 # in a matching directory get a red border, tint and badge, and a risky
