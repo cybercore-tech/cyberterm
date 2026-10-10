@@ -24,7 +24,7 @@ use alacritty_terminal::Term;
 
 use crate::session::GridSize;
 
-/// How much output each pane keeps ([rewind]); 0 turns recording off.
+/// How much output each pane keeps (`[rewind]`); 0 turns recording off.
 /// Global because the daemon client creates recorders too.
 pub static CAP_BYTES: AtomicUsize = AtomicUsize::new(2 * 1024 * 1024);
 
@@ -78,7 +78,7 @@ pub struct Recorder {
 }
 
 impl Recorder {
-    /// A recorder with the configured cap ([rewind] buffer_kb).
+    /// A recorder with the configured cap (`[rewind] buffer_kb`).
     pub fn new(size: GridSize) -> Self {
         Self::with_cap(size, CAP_BYTES.load(Ordering::Relaxed))
     }
@@ -179,7 +179,7 @@ struct Checkpoint {
 pub struct Timeline {
     chunks: Vec<Chunk>,
     /// For each moment, the number of chunks it includes (so moment i is
-    /// the state after chunks[..moments[i]]). Moment 0 is the start.
+    /// the state after `chunks[..moments[i]]`). Moment 0 is the start.
     moments: Vec<usize>,
     checkpoints: Vec<Checkpoint>,
     start_ms: u64,

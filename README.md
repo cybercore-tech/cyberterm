@@ -30,6 +30,23 @@ the binary itself. No Intel Mac build — GitHub's `macos-13` runner
 queue capacity has been too degraded to build one reliably in CI; build
 from source with `cargo build --release` there instead.
 
+### From crates.io
+
+```bash
+cargo install cyberterm
+```
+
+Builds the latest release from source. You need:
+- **Rust:** 1.88 or newer.
+- **A C compiler:** for the embedded Lua. On Arch, install `base-devel`.
+- **Debian/Ubuntu:** also `libxkbcommon-dev libwayland-dev libx11-dev libxi-dev libxcursor-dev libxrandr-dev libgl1-mesa-dev`.
+
+Then add shell integration to your shell's rc file. This is what command blocks, history and AI explanations rely on:
+
+```bash
+eval "$(cyberterm +shell-integration zsh)"   # or bash / fish
+```
+
 ## 🚀 Commands
 
 ```bash

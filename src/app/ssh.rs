@@ -34,7 +34,7 @@ impl App {
     }
 
     /// The split action: on the same host when the pane is in SSH (and
-    /// [splits] follow_ssh is on), else a local shell in the same directory.
+    /// `[splits] follow_ssh` is on), else a local shell in the same directory.
     pub(super) fn split(&mut self, dir: Direction) {
         let follow = if self.config.splits.follow_ssh {
             self.ssh_follow_command()
