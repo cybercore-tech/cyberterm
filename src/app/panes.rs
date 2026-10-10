@@ -93,6 +93,7 @@ impl App {
             danger: None,
             danger_manual: None,
             ports: Vec::new(),
+            agent: None,
         });
         self.lua_emit("pane_created", serde_json::json!({ "pane": id }));
         Ok(id)

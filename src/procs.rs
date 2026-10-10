@@ -11,6 +11,40 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+/// One variable from a process's environment (as it was when the process
+/// started). Only the user's own processes are readable.
+pub fn env_var(pid: u32, key: &str) -> Option<String> {
+    let raw = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    let prefix = format!("{key}=");
+    raw.split(|b| *b == 0)
+        .find_map(|kv| kv.strip_prefix(prefix.as_bytes()))
+        .map(|v| String::from_utf8_lossy(v).into_owned())
+}
+
+/// Processes whose environment has `key=value`.
+pub fn with_env(key: &str, value: &str) -> Vec<u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&pid| env_var(pid, key).as_deref() == Some(value))
+        .collect()
+}
+
+/// Processes whose working directory is `dir` or inside it.
+pub fn with_cwd_under(dir: &Path) -> Vec<u32> {
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|pid| {
+            std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd.starts_with(dir))
+        })
+        .collect()
+}
+
 /// The foreground process group leader of the terminal `shell_pid` is
 /// attached to: the shell itself at a prompt, or the program it's running.
 pub fn foreground(shell_pid: u32) -> Option<u32> {
@@ -349,6 +383,30 @@ mod tests {
         assert!(glob("*", ""));
         assert!(!glob("prod", "production"));
         assert!(glob("a*b*c", "aXXbYYc"));
+    }
+
+    #[test]
+    fn environment_variables_are_read_from_proc() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("5")
+            .env("CYBERTERM_TEST_MARK", "x1")
+            .spawn()
+            .unwrap();
+        // The child may still be on its way through exec.
+        for _ in 0..100 {
+            if env_var(child.id(), "CYBERTERM_TEST_MARK").is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(
+            env_var(child.id(), "CYBERTERM_TEST_MARK").as_deref(),
+            Some("x1")
+        );
+        assert_eq!(env_var(child.id(), "CYBERTERM_TEST_MAR"), None);
+        assert_eq!(with_env("CYBERTERM_TEST_MARK", "x1"), vec![child.id()]);
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

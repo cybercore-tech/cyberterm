@@ -69,6 +69,7 @@ cyberterm +history [words]         # search saved commands and their output
 cyberterm +json [file]             # browse JSON as a collapsible tree (or pipe it in)
 cyberterm +kill-session <name>     # end a daemon session and its shells
 cyberterm +mcp                     # MCP server so AI agents can work with your panes (+mcp --help)
+cyberterm +agent <name> [task]     # run a coding agent in its own worktree and tab (+agent help)
 ```
 
 ## ⌨️ Keys and mouse
@@ -295,6 +296,39 @@ codex mcp add cyberterm -- cyberterm +mcp      # Codex CLI
 - **Settings:** `[agents]` sets `read` and `write` to `"ask"`, `"allow"` or `"deny"`; `enabled = false` turns agent access off.
 
 The prompts keep well-behaved agents from acting silently. They aren't a sandbox: a program already running as you can reach the control socket directly.
+
+### Agent sessions
+
+Run any coding agent in a git worktree of its own, in a tab of its own:
+
+```bash
+cyberterm +agent claude fix the flaky login test   # or codex, gemini, copilot, opencode, crush, ...
+cyberterm +agent                                   # the agents found here, and your sessions
+cyberterm +agent rm fix-the-flaky-login            # remove it and its worktree when you're done
+```
+
+- **Any agent:**
+  - Cyberterm offers the agents it finds on your PATH: Claude Code, Codex, GitHub Copilot, Gemini CLI, Cursor Agent, opencode, Crush, Grok, pi, oh-my-pi, Antigravity, Muse Code, Hermes, Ori, Aider, Goose, Amp, and others.
+  - Add any other command under `[agents.launch.<name>]`.
+  - The task goes where each agent takes it (as an argument, or after a flag like `-i`), or is shown before it starts.
+- **Its own worktree:**
+  - Each session gets `../<repo>-<id>` on a new branch `agent/<id>`, so agents never trample each other or your checkout.
+  - `--no-worktree` runs it in place instead.
+- **From the palette:** **New agent: …** in the command palette starts one for the current pane's directory.
+- **Recognised wherever it runs:**
+  - Agent tabs are titled and badged (`◆ Claude Code · fix-the-flaky-login`).
+  - This works for daemon sessions too: close the window and the agent keeps working, and reattaching picks it back up.
+- **Careful cleanup:** `+agent rm` refuses while the agent runs or while its worktree has uncommitted changes or commits (`--force` overrides). It deletes the branch only when nothing was committed on it.
+
+```toml
+[agents]
+worktrees = true        # false: agents run in the current directory
+worktree_dir = ""       # empty: next to the repository
+
+[agents.launch.aider]
+command = "aider --model sonnet"
+prompt = "none"         # "positional", a flag such as "--message", or "none"
+```
 
 ### Ask and Explain
 

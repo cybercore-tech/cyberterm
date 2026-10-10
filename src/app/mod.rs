@@ -42,6 +42,7 @@ use crate::theme::{Theme, ThemeRegistry};
 use crate::ui;
 use crate::ui::context_menu;
 
+mod agent_tabs;
 mod agents;
 mod ai;
 mod blocks;
@@ -122,6 +123,8 @@ struct Pane {
     danger_manual: Option<bool>,
     /// TCP ports its programs are listening on (live ports).
     ports: Vec<u16>,
+    /// The agent session running in it (`cyberterm +agent`): id, name.
+    agent: Option<(String, String)>,
 }
 
 /// A link under the mouse pointer: viewport row, column range, target.
@@ -1474,6 +1477,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.reload_config(false);
             self.refresh_danger();
             self.refresh_ports();
+            self.refresh_agent_panes();
             self.lua_poll();
         }
         let mut next = self.last_poll + POLL_INTERVAL;

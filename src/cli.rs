@@ -326,6 +326,14 @@ pub fn handle_arguments(
             CliAction::ExitCleanly
         }
 
+        "+agent" | "+agents" => {
+            let code = crate::agent::run_cli(&args[2..], &current_config.agents);
+            if code != 0 {
+                std::process::exit(code);
+            }
+            CliAction::ExitCleanly
+        }
+
         "+themes" => {
             let code = crate::theme_install::run(&config_root.join("themes"), &args[2..]);
             if code != 0 {
@@ -437,6 +445,7 @@ pub fn handle_arguments(
             println!(
                 "  cyberterm +themes [install|remove]  theme collections: 1,500+ more on request"
             );
+            println!("  cyberterm +agent <name> [task]     run a coding agent in its own worktree and tab (+agent help)");
             println!("  cyberterm +mcp                     MCP server for AI agents (+mcp --help to connect one)");
             println!("  cyberterm +kill-session <name>     end a daemon session and its shells");
             println!("  cyberterm +daemon                  run the session daemon (normally started for you)");

@@ -127,6 +127,19 @@ read = "ask"
 write = "ask"
 # Log every agent request to ~/.local/state/cyberterm/agents.log.
 audit_log = true
+# `cyberterm +agent <name> [task]` (or "New agent" in the command palette)
+# starts a coding agent in a new tab, in a git worktree of its own
+# (../<repo>-<id> on branch agent/<id>). Known agents on PATH -- Claude
+# Code, Codex, Copilot, Gemini CLI, Cursor Agent, opencode, Crush, ... --
+# are offered automatically.
+worktrees = true
+# Where worktrees go; empty means next to the repository.
+worktree_dir = ""
+# Other agents, or changes to a known one:
+# [agents.launch.mine]
+# command = "my-agent --flag"
+# label = "My agent"
+# prompt = "positional"   # how it takes a task: "positional", a flag like "-i", or "none"
 
 [lua]
 # Scripts in ~/.config/cyberterm/init.lua (or `script`): react to commands

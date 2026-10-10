@@ -430,10 +430,15 @@ impl App {
             .chain(a.write.iter())
             .find(|(_, p)| *p == pane)
             .map(|(name, _)| name.clone());
-        let Some(name) = recent.or(granted) else {
+        // An agent session running in the pane (`+agent`) names itself.
+        let session = self
+            .pane(pane)
+            .and_then(|p| p.agent.as_ref())
+            .map(|(id, label)| format!("{label} · {id}"));
+        let Some(name) = session.or(recent).or(granted) else {
             return 0;
         };
-        let text = format!(" ◆ {} ", clip(&name, 20));
+        let text = format!(" ◆ {} ", clip(&name, 36));
         let width = text.chars().count();
         if frame.rows == 0 || frame.cols < width + right + 2 {
             return 0;

@@ -396,7 +396,7 @@ impl App {
         self.lua_set_status(&format!("Lua: {first}"), true);
     }
 
-    fn lua_set_status(&mut self, text: &str, error: bool) {
+    pub(super) fn lua_set_status(&mut self, text: &str, error: bool) {
         self.lua.status = Some((text.to_string(), Instant::now(), error));
         self.request_redraw();
     }

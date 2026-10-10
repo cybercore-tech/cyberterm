@@ -458,6 +458,28 @@ pub struct AgentsConfig {
     pub write: AgentPolicy,
     /// Record every agent request in `$XDG_STATE_HOME/cyberterm/agents.log`.
     pub audit_log: bool,
+    /// `+agent` starts each agent in a git worktree of its own.
+    pub worktrees: bool,
+    /// Where those worktrees go; empty means next to the repository
+    /// (`../<repo>-<id>`).
+    pub worktree_dir: String,
+    /// Agents to offer besides the known ones found on PATH, or overrides
+    /// for them (`[agents.launch.<name>]`).
+    pub launch: std::collections::BTreeMap<String, AgentLaunch>,
+}
+
+/// How to start one agent (`[agents.launch.<name>]`).
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct AgentLaunch {
+    /// The command line; may be empty to adjust a known agent's label or
+    /// prompt only.
+    pub command: String,
+    /// The name shown in menus.
+    pub label: String,
+    /// How it takes a starting task: "positional", a flag such as "-i",
+    /// or "none".
+    pub prompt: String,
 }
 
 impl Default for AgentsConfig {
@@ -467,6 +489,9 @@ impl Default for AgentsConfig {
             read: AgentPolicy::Ask,
             write: AgentPolicy::Ask,
             audit_log: true,
+            worktrees: true,
+            worktree_dir: String::new(),
+            launch: Default::default(),
         }
     }
 }
