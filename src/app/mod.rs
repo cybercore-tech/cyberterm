@@ -45,6 +45,7 @@ use crate::ui::context_menu;
 mod agents;
 mod ai;
 mod blocks;
+mod command_palette;
 mod control;
 mod daemon;
 mod danger;
@@ -152,6 +153,7 @@ enum MenuAction {
     SplitLocal(crate::layout::Direction),
     OpenPort(u16),
     Rewind,
+    CommandPalette,
     Explain(blocks::BlockRef, shell::BlockMeta),
 }
 
@@ -242,6 +244,9 @@ pub struct App {
     rewind: Option<rewind::RewindUi>,
     /// The Lua script, if any.
     lua: lua::LuaState,
+    /// The command palette (Ctrl+Shift+P), and what was picked recently.
+    command_palette: Option<command_palette::CommandPalette>,
+    palette_recent: Vec<command_palette::Target>,
     /// Saves finished commands (`[history]`).
     history: Option<crate::history::Recorder>,
     history_policy: crate::history::Policy,
@@ -329,6 +334,8 @@ impl App {
             port_hits: Default::default(),
             rewind: None,
             lua: Default::default(),
+            command_palette: None,
+            palette_recent: Vec::new(),
             history_policy: crate::history::Policy::from_config(
                 &crate::config::HistoryConfig::default(),
             ),
@@ -863,6 +870,7 @@ impl App {
                 self.draw_ai(&mut frame);
             }
             if focused {
+                self.draw_command_palette(&mut frame);
                 self.draw_lua_status(&mut frame);
                 self.draw_danger_confirm(&mut frame);
                 self.draw_consent(&mut frame);
@@ -1024,6 +1032,20 @@ impl App {
     // Theme menu
     // ------------------------------------------------------------------
 
+    /// Applies a theme and makes it the default (config + the shared
+    /// Cybercore selection).
+    fn select_theme(&mut self, theme: &Theme) {
+        self.apply_theme(theme);
+        self.config.theme = theme.name.clone();
+        let _ = config::save_config(&self.config_root, &self.config);
+        self.config_mtime = config::config_mtime(&self.config_root);
+        // Shared selection drives Cyberterm and the other Cybercore apps;
+        // local Kitty themes aren't in it.
+        let _ = cybercore::theme::ThemeCatalog::load()
+            .map(|mut catalog| catalog.select(&theme.name).is_ok());
+        self.request_redraw();
+    }
+
     fn handle_theme_menu_key(&mut self, key: &Key) {
         if self.theme_menu.is_creating_mode {
             match key {
@@ -1077,13 +1099,8 @@ impl App {
                     .themes
                     .get(self.theme_menu.registry.selected_index)
                 {
-                    self.config.theme = theme.name.clone();
-                    let _ = config::save_config(&self.config_root, &self.config);
-                    self.config_mtime = config::config_mtime(&self.config_root);
-                    // Shared selection drives Cyberterm and the other
-                    // Cybercore apps; local Kitty themes aren't in it.
-                    let _ = cybercore::theme::ThemeCatalog::load()
-                        .map(|mut catalog| catalog.select(&theme.name).is_ok());
+                    let theme = theme.clone();
+                    self.select_theme(&theme);
                 }
                 self.theme_menu.is_open = false;
             }

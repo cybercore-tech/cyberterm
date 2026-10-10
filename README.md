@@ -211,8 +211,18 @@ cyberterm +ctl send-text pane=3 text=$'make test\r'
 cyberterm +ctl new-tab title=logs cwd=~/src command="tail -f app.log"
 ```
 
-This is the same API the planned background daemon and the MCP bridge for AI
-agents will use. Turn it off with `[control] enabled = false`.
+This is the same API Lua scripts and the MCP bridge for AI agents use. Turn it off with `[control] enabled = false`.
+
+### Command palette
+
+**Ctrl+Shift+P** opens one searchable list of everything you can do:
+- **Actions:** every action, with its shortcut.
+- **Your Lua commands.**
+- **Open tabs and panes:** jump straight to one.
+- **Themes:** switch instantly.
+- **Recent commands from history:** Enter types one at the prompt, Ctrl+Enter also runs it.
+
+Type a few letters ("spr" finds *Split right*) and press **Enter**. Items you picked recently come first.
 
 ## 🧱 Command blocks and history
 

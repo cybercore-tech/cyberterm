@@ -323,6 +323,26 @@ impl App {
         self.request_redraw();
     }
 
+    /// Names of the script's `cyberterm.command`s, sorted.
+    pub(super) fn lua_command_names(&self) -> Vec<String> {
+        let Some(host) = &self.lua.host else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = host
+            .lua
+            .globals()
+            .get::<Table>("cyberterm")
+            .and_then(|ct| ct.get::<Table>("_commands"))
+            .map(|t| {
+                t.pairs::<String, LuaValue>()
+                    .filter_map(|kv| kv.ok().map(|(k, _)| k))
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
     /// `+ctl lua name=... args=...`.
     pub(super) fn lua_command(&mut self, name: &str, args: Value) -> Result<Value, String> {
         if self.lua.host.is_none() {

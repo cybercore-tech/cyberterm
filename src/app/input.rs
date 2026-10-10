@@ -27,6 +27,11 @@ impl App {
             return;
         }
 
+        if self.command_palette_open() {
+            self.command_palette_key(&event);
+            return;
+        }
+
         if self.rewind_open() {
             self.rewind_key(&event);
             return;
@@ -201,6 +206,7 @@ impl App {
             Action::ExplainError => self.ai_explain_last(),
             Action::ToggleDanger => self.toggle_danger(),
             Action::Rewind => self.toggle_rewind(),
+            Action::CommandPalette => self.toggle_command_palette(),
         }
         self.request_redraw();
     }
@@ -870,6 +876,12 @@ impl App {
             );
         }
         add(
+            "Command Palette…",
+            self.bindings.hint(Action::CommandPalette),
+            true,
+            MenuAction::CommandPalette,
+        );
+        add(
             "Rewind…",
             self.bindings.hint(Action::Rewind),
             true,
@@ -992,6 +1004,7 @@ impl App {
             MenuAction::SplitLocal(dir) => self.split_local(dir),
             MenuAction::OpenPort(port) => self.open_port(port),
             MenuAction::Rewind => self.toggle_rewind(),
+            MenuAction::CommandPalette => self.toggle_command_palette(),
             MenuAction::Explain(block, meta) => self.ai_explain(block, &meta),
         }
     }
