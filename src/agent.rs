@@ -85,6 +85,9 @@ pub fn adapter(argv: &[String]) -> Option<&'static str> {
         "claude" => Some("claude"),
         "codex" => Some("codex"),
         "gemini" => Some("gemini"),
+        "copilot" => Some("copilot"),
+        "cursor-agent" => Some("cursor"),
+        "hermes" => Some("hermes"),
         _ => None,
     }
 }
@@ -514,7 +517,14 @@ pub fn exec(id: &str, cfg: &AgentsConfig) -> Result<std::convert::Infallible, St
                     extra.push(o);
                 }
             }
-            // Gemini's hooks come from `+agent setup gemini`.
+            Some("copilot") => match copilot_plugin_dir() {
+                Ok(dir) => {
+                    extra.push("--plugin-dir".to_string());
+                    extra.push(dir.to_string_lossy().into_owned());
+                }
+                Err(e) => eprintln!("cyberterm: Copilot's hooks are off ({e})"),
+            },
+            // Gemini's, Cursor's and Hermes's come from `+agent setup`.
             _ => {}
         }
     }
@@ -534,6 +544,21 @@ pub fn exec(id: &str, cfg: &AgentsConfig) -> Result<std::convert::Infallible, St
     }
     let err = cmd.exec();
     Err(format!("couldn't start {}: {err}", argv[0]))
+}
+
+/// Writes the plugin that gives Copilot sessions their hooks (the same
+/// for every session) and returns its directory.
+fn copilot_plugin_dir() -> Result<PathBuf, String> {
+    let dir = state_dir().join("copilot-plugin");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let hook = format!("{} +hook copilot", self_path());
+    for (name, body) in crate::flight_log::copilot_plugin(&hook) {
+        let path = dir.join(name);
+        if std::fs::read_to_string(&path).ok().as_deref() != Some(body.as_str()) {
+            std::fs::write(&path, body).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+    }
+    Ok(dir)
 }
 
 /// The command a tab types to start a session.
@@ -744,7 +769,8 @@ cyberterm +agent: run any coding agent in a worktree of its own
   cyberterm +agent list                  sessions: running, changed files, commits
   cyberterm +agent log [id] [-o] [-f]    what it did: prompts, commands, edits
                                          (-o with output, -f keep following)
-  cyberterm +agent setup [agent]         what each agent reports; opt-in hooks (Gemini)
+  cyberterm +agent setup [agent]         what each agent reports; opt-in hooks
+                                         (Gemini, Cursor, Hermes)
   cyberterm +agent rm <id> [--force]     remove a session and its worktree
                                          (--force: even with changes or commits)
 
@@ -938,7 +964,7 @@ fn list(cfg: &AgentsConfig, with_agents: bool) {
                 "  {:<14} {:<16} {how:<28} {}",
                 l.name,
                 l.label,
-                crate::agent_setup::coverage(&l.name)
+                crate::agent_setup::coverage(adapter(&l.argv))
             );
         }
         println!();

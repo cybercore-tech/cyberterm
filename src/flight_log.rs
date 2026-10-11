@@ -180,22 +180,25 @@ pub fn from_open(v: &Value) -> Result<Event, String> {
 }
 
 // ----------------------------------------------------------------------
-// Agents' own hooks: Claude Code, Codex, Gemini CLI
+// Agents' own hooks: Claude Code, Codex, Gemini CLI, Copilot, Cursor, Hermes
 // ----------------------------------------------------------------------
 //
 // Claude Code and Codex speak the same hook protocol (PreToolUse,
-// PostToolUse, Stop, ...); Gemini CLI has its own names (BeforeTool,
-// AfterTool, AfterAgent, ...) and shapes. All three send one JSON object
-// per hook on stdin.
+// PostToolUse, Stop, ...); the others have their own names and shapes,
+// which `normalize` turns into that one. Each sends one JSON object per
+// hook on stdin.
 //
 // How the hooks get there:
 // - Claude Code: `--settings <json>` for that session only.
 // - Codex: `-c hooks.<Event>=[...]` for that session only. Codex asks you
 //   to review hooks it hasn't seen before; you approve Cyberterm's once.
-// - Gemini CLI: has no per-session way in (its system settings must be
-//   root-owned), so `cyberterm +agent setup gemini` adds the hooks to
-//   ~/.gemini/settings.json once -- they do nothing outside Cyberterm's
-//   agent sessions.
+// - Copilot CLI: `--plugin-dir` with a plugin of Cyberterm's own holding
+//   the hooks, for that session only.
+// - Gemini CLI, Cursor and Hermes have no per-session way in (Gemini's
+//   system settings must be root-owned; the Cursor CLI ignores plugin
+//   hooks; Hermes reads hooks and plugins only from its own config), so
+//   `cyberterm +agent setup <agent>` installs them once -- they do
+//   nothing outside Cyberterm's agent sessions.
 
 /// The agents whose hooks Cyberterm understands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -203,16 +206,23 @@ pub enum Agent {
     Claude,
     Codex,
     Gemini,
+    Copilot,
+    Cursor,
+    Hermes,
 }
 
 impl Agent {
+    pub const ALL: [Agent; 6] = [
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Gemini,
+        Agent::Copilot,
+        Agent::Cursor,
+        Agent::Hermes,
+    ];
+
     pub fn parse(s: &str) -> Option<Agent> {
-        match s {
-            "claude" => Some(Agent::Claude),
-            "codex" => Some(Agent::Codex),
-            "gemini" => Some(Agent::Gemini),
-            _ => None,
-        }
+        Agent::ALL.into_iter().find(|a| a.name() == s)
     }
 
     pub fn name(self) -> &'static str {
@@ -220,6 +230,9 @@ impl Agent {
             Agent::Claude => "claude",
             Agent::Codex => "codex",
             Agent::Gemini => "gemini",
+            Agent::Copilot => "copilot",
+            Agent::Cursor => "cursor",
+            Agent::Hermes => "hermes",
         }
     }
 
@@ -228,6 +241,9 @@ impl Agent {
         match self {
             Agent::Claude | Agent::Codex => tool == "Bash",
             Agent::Gemini => tool == "run_shell_command",
+            Agent::Copilot => matches!(tool, "bash" | "powershell"),
+            Agent::Cursor => matches!(tool, "Shell" | "run_terminal_cmd"),
+            Agent::Hermes => tool == "terminal",
         }
     }
 
@@ -263,6 +279,38 @@ impl Agent {
                 ("SessionStart", false),
                 ("SessionEnd", false),
             ],
+            Agent::Copilot => &[
+                ("preToolUse", false),
+                ("postToolUse", false),
+                ("postToolUseFailure", false),
+                ("userPromptSubmitted", false),
+                ("notification", false),
+                ("permissionRequest", false),
+                ("agentStop", false),
+                ("sessionStart", false),
+                ("sessionEnd", false),
+            ],
+            // The Cursor CLI fires most of these; beforeSubmitPrompt and
+            // sessionEnd only reach it from the editor so far.
+            Agent::Cursor => &[
+                ("preToolUse", false),
+                ("postToolUse", false),
+                ("postToolUseFailure", false),
+                ("afterFileEdit", false),
+                ("beforeSubmitPrompt", false),
+                ("stop", false),
+                ("sessionStart", false),
+                ("sessionEnd", false),
+            ],
+            // Registered by Cyberterm's Hermes plugin (src/agent_setup.rs).
+            Agent::Hermes => &[
+                ("pre_tool_call", false),
+                ("post_tool_call", false),
+                ("pre_llm_call", false),
+                ("pre_approval_request", false),
+                ("on_session_start", false),
+                ("on_session_end", false),
+            ],
         }
     }
 
@@ -275,20 +323,52 @@ impl Agent {
     }
 }
 
-/// The `hooks` object (event -> matcher groups) running `hook` -- a shell
-/// command, this binary's `+hook <agent>` -- for every event.
+/// The events Cyberterm hooks for an agent.
+pub fn hook_events(agent: Agent) -> Vec<&'static str> {
+    agent.events().iter().map(|(e, _)| *e).collect()
+}
+
+/// The `hooks` object (event -> hook entries) running `hook` -- a shell
+/// command, this binary's `+hook <agent>` -- for every event, in the
+/// agent's own format.
 pub fn hooks_json(agent: Agent, hook: &str) -> Value {
     let mut hooks = serde_json::Map::new();
     for (event, tools) in agent.events() {
-        let mut group = serde_json::json!({
-            "hooks": [{ "type": "command", "command": hook, "timeout": agent.timeout() }]
-        });
-        if *tools {
-            group["matcher"] = Value::String("*".into());
-        }
-        hooks.insert(event.to_string(), Value::Array(vec![group]));
+        let entry = match agent {
+            // Copilot's payloads don't name their event, so the command does.
+            Agent::Copilot => serde_json::json!({
+                "type": "command",
+                "bash": format!("{hook} {event}"),
+                "timeoutSec": agent.timeout(),
+            }),
+            Agent::Cursor => serde_json::json!({ "command": hook, "timeout": agent.timeout() }),
+            _ => {
+                let mut group = serde_json::json!({
+                    "hooks": [{ "type": "command", "command": hook, "timeout": agent.timeout() }]
+                });
+                if *tools {
+                    group["matcher"] = Value::String("*".into());
+                }
+                group
+            }
+        };
+        hooks.insert(event.to_string(), Value::Array(vec![entry]));
     }
     Value::Object(hooks)
+}
+
+/// Copilot's plugin for a session: its files, as (name, contents).
+pub fn copilot_plugin(hook: &str) -> [(&'static str, String); 2] {
+    let manifest = serde_json::json!({
+        "name": "cyberterm",
+        "description": "Cyberterm's flight log: what Copilot does in a Cyberterm agent session",
+        "version": env!("CARGO_PKG_VERSION"),
+    });
+    let hooks = serde_json::json!({ "version": 1, "hooks": hooks_json(Agent::Copilot, hook) });
+    [
+        ("plugin.json", format!("{manifest:#}\n")),
+        ("hooks.json", format!("{hooks:#}\n")),
+    ]
 }
 
 /// Claude Code's `--settings` JSON.
@@ -360,6 +440,13 @@ fn edited_paths(agent: Agent, tool: &str, input: &Value) -> Vec<String> {
             paths
         }
         (Agent::Gemini, "replace" | "write_file") => one("file_path"),
+        (Agent::Copilot, "edit" | "create") => one("path"),
+        (Agent::Hermes, "write_file") => one("path"),
+        // Hermes's patch: find-and-replace on `path`, or a V4A patch.
+        (Agent::Hermes, "patch") => match s(input, "patch") {
+            Some(_) => edited_paths(Agent::Codex, "apply_patch", input),
+            None => one("path"),
+        },
         _ => Vec::new(),
     }
 }
@@ -478,11 +565,196 @@ fn shell_result(agent: Agent, text: &str) -> (Option<i32>, Option<u64>, String) 
             (exit, None, output)
         }
         Agent::Claude => (None, None, text.to_string()),
+        Agent::Copilot | Agent::Cursor | Agent::Hermes => json_or_text_result(text),
     }
 }
 
+/// A shell result that is JSON (Hermes: `{"output", "exit_code",
+/// "error"}`; Cursor's tool output) or text that may state its exit code
+/// ("exit code 1", "exit code: 1", "<exited with exit code 1>").
+fn json_or_text_result(text: &str) -> (Option<i32>, Option<u64>, String) {
+    if let Ok(v @ Value::Object(_)) = serde_json::from_str::<Value>(text.trim()) {
+        let exit = ["exit_code", "exitCode", "code"]
+            .iter()
+            .find_map(|k| v.get(k).and_then(Value::as_i64))
+            .map(|c| c as i32);
+        let duration = ["duration_ms", "durationMs"]
+            .iter()
+            .find_map(|k| v.get(k).and_then(Value::as_u64));
+        let output = response_text(&v).unwrap_or_default();
+        return (exit, duration, output);
+    }
+    let lower = text.to_lowercase();
+    let exit = lower.rfind("exit code").and_then(|i| {
+        let rest = lower[i + "exit code".len()..].trim_start_matches([':', ' ', '=']);
+        let digits: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        digits.parse().ok()
+    });
+    let output = match text.rfind("<exited with exit code") {
+        Some(i) => text[..i].trim_end().to_string(),
+        None => text.to_string(),
+    };
+    (exit, None, output)
+}
+
+/// The shell tool's name for edits Cursor reports through `afterFileEdit`:
+/// its tool calls for them would otherwise show up twice.
+fn cursor_edit_tool(tool: &str) -> bool {
+    let t = tool.to_lowercase();
+    ["edit", "write", "replace", "delete", "patch"]
+        .iter()
+        .any(|w| t.contains(w))
+}
+
+/// An agent's hook payload in Claude Code's terms (`hook_event_name`,
+/// `tool_name`, `tool_input`, `tool_response`, `tool_use_id`, `prompt`,
+/// `message`, `source`, `reason`, `cwd`), which `from_hook` reads. `event`
+/// is the event named on the hook's command line, for agents whose
+/// payloads don't say (Copilot).
+pub fn normalize(agent: Agent, v: &Value, event: Option<&str>) -> Value {
+    use serde_json::json;
+    let name = s(v, "hook_event_name")
+        .or_else(|| s(v, "hookEventName"))
+        .or(event)
+        .unwrap_or_default();
+    let cwd = s(v, "cwd").map(str::to_string).or_else(|| {
+        v.get("workspace_roots")
+            .and_then(|r| r.get(0))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+    // Tool arguments some agents send as a JSON string.
+    let args = |key: &str| match v.get(key) {
+        Some(Value::String(t)) => serde_json::from_str(t).unwrap_or(Value::String(t.clone())),
+        Some(other) => other.clone(),
+        None => Value::Null,
+    };
+    let mut out = match agent {
+        Agent::Claude | Agent::Codex | Agent::Gemini => return v.clone(),
+        Agent::Copilot => {
+            let result = v.get("toolResult");
+            let failed = result
+                .and_then(|r| s(r, "resultType"))
+                .is_some_and(|t| t != "success");
+            let mapped = match name {
+                "sessionStart" | "SessionStart" => "SessionStart",
+                "sessionEnd" | "SessionEnd" => "SessionEnd",
+                "userPromptSubmitted" | "UserPromptSubmit" => "UserPromptSubmit",
+                "preToolUse" | "PreToolUse" => "PreToolUse",
+                "postToolUse" | "PostToolUse" if failed => "PostToolUseFailure",
+                "postToolUse" | "PostToolUse" => "PostToolUse",
+                "postToolUseFailure" | "PostToolUseFailure" => "PostToolUseFailure",
+                "notification" | "Notification" => "Notification",
+                "permissionRequest" | "PermissionRequest" => "PermissionRequest",
+                "agentStop" | "Stop" => "Stop",
+                _ => "",
+            };
+            let input = match v.get("toolArgs") {
+                Some(_) => args("toolArgs"),
+                None => args("tool_input"),
+            };
+            let error = match v.get("error") {
+                Some(Value::String(e)) => Some(e.clone()),
+                Some(e @ Value::Object(_)) => s(e, "message").map(str::to_string),
+                _ => None,
+            };
+            json!({
+                "hook_event_name": mapped,
+                "tool_name": s(v, "toolName").or_else(|| s(v, "tool_name")),
+                "tool_input": input,
+                "tool_response": result
+                    .and_then(|r| s(r, "textResultForLlm"))
+                    .or_else(|| s(v, "tool_response")),
+                "error": error,
+                "prompt": s(v, "prompt"),
+                "message": s(v, "message"),
+                "source": s(v, "source"),
+                "reason": s(v, "reason"),
+            })
+        }
+        Agent::Cursor => {
+            let tool = s(v, "tool_name").unwrap_or_default();
+            let mapped = match name {
+                "sessionStart" => "SessionStart",
+                "sessionEnd" => "SessionEnd",
+                "beforeSubmitPrompt" => "UserPromptSubmit",
+                "preToolUse" if agent.is_shell(tool) => "PreToolUse",
+                "postToolUse" if !agent.is_shell(tool) && cursor_edit_tool(tool) => "",
+                "postToolUse" => "PostToolUse",
+                "postToolUseFailure" => "PostToolUseFailure",
+                "afterFileEdit" => "PostToolUse",
+                "stop" => "Stop",
+                _ => "",
+            };
+            if name == "afterFileEdit" {
+                json!({
+                    "hook_event_name": mapped,
+                    "tool_name": "Edit",
+                    "tool_input": { "file_path": s(v, "file_path") },
+                })
+            } else {
+                json!({
+                    "hook_event_name": mapped,
+                    "tool_name": tool,
+                    "tool_input": args("tool_input"),
+                    "tool_response": v.get("tool_output").cloned(),
+                    "tool_use_id": s(v, "tool_use_id"),
+                    "error": s(v, "error_message"),
+                    "prompt": s(v, "prompt"),
+                    "source": s(v, "composer_mode"),
+                    "reason": s(v, "reason"),
+                })
+            }
+        }
+        Agent::Hermes => {
+            // on_session_end fires at the end of every turn; the CLI's
+            // exit sends a shorter one without a turn.
+            let mapped = match name {
+                "on_session_start" => "SessionStart",
+                "on_session_end" if v.get("turn_id").is_some_and(|t| !t.is_null()) => "Stop",
+                "on_session_end" => "SessionEnd",
+                "pre_llm_call" => "UserPromptSubmit",
+                "pre_tool_call" => "PreToolUse",
+                "post_tool_call" => match s(v, "status") {
+                    Some("success") | None => "PostToolUse",
+                    Some(_) => "PostToolUseFailure",
+                },
+                "pre_approval_request" => "PermissionRequest",
+                _ => "",
+            };
+            json!({
+                "hook_event_name": mapped,
+                "tool_name": s(v, "tool_name"),
+                "tool_input": args("args"),
+                "tool_response": v.get("result").cloned(),
+                "tool_use_id": s(v, "tool_call_id"),
+                "error": s(v, "error_message"),
+                "prompt": s(v, "user_message"),
+                "message": s(v, "description").or_else(|| s(v, "command")),
+                "source": s(v, "platform"),
+                "reason": s(v, "reason"),
+            })
+        }
+    };
+    if let (Some(cwd), Some(obj)) = (cwd, out.as_object_mut()) {
+        obj.insert("cwd".into(), Value::String(cwd));
+    }
+    out
+}
+
 /// Events from one hook call of `agent`.
+#[cfg(test)]
 pub fn from_hook(agent: Agent, v: &Value) -> Vec<Event> {
+    from_hook_as(agent, v, None)
+}
+
+/// `from_hook`, with the event named on the hook's command line.
+pub fn from_hook_as(agent: Agent, v: &Value, event: Option<&str>) -> Vec<Event> {
+    let normalized = normalize(agent, v, event);
+    let v = &normalized;
     let name = s(v, "hook_event_name").unwrap_or_default();
     let tool = s(v, "tool_name").unwrap_or_default();
     let input = v.get("tool_input").cloned().unwrap_or(Value::Null);
@@ -585,35 +857,35 @@ pub fn from_claude(v: &Value) -> Vec<Event> {
     from_hook(Agent::Claude, v)
 }
 
-/// `cyberterm +hook <claude|codex|gemini|event> [--session <id>]`: reads
+/// `cyberterm +hook <agent|event> [event-name] [--session <id>]`: reads
 /// hook input on stdin and appends to the session's flight log. It never
 /// fails the caller (always exits 0, prints nothing) -- an agent must not
 /// stop because its log couldn't be written -- and outside Cyberterm's
 /// agent sessions it does nothing (hooks installed with `+agent setup`
 /// run for every session of that agent).
 pub fn run_hook(args: &[String]) {
-    let mut kind = "event";
+    let mut kind: Option<String> = None;
+    let mut event: Option<String> = None;
     let mut session = std::env::var("CYBERTERM_AGENT_ID").ok();
     let mut iter = args.iter();
     while let Some(a) = iter.next() {
         match a.as_str() {
             "--session" => session = iter.next().cloned(),
-            "claude" => kind = "claude",
-            "codex" => kind = "codex",
-            "gemini" => kind = "gemini",
-            "event" => kind = "event",
+            _ if kind.is_none() => kind = Some(a.clone()),
+            _ if event.is_none() => event = Some(a.clone()),
             _ => {}
         }
     }
+    let kind = kind.unwrap_or_else(|| "event".into());
     // Read everything first, so the agent never writes into a closed pipe.
     let mut input = String::new();
     let _ = std::io::stdin().take(MAX_INPUT).read_to_string(&mut input);
     let Some(session) = session.filter(|s| crate::agent::load(s).is_ok()) else {
         return;
     };
-    let events: Vec<Event> = match Agent::parse(kind) {
+    let events: Vec<Event> = match Agent::parse(&kind) {
         Some(agent) => serde_json::from_str(&input)
-            .map(|v| from_hook(agent, &v))
+            .map(|v| from_hook_as(agent, &v, event.as_deref()))
             .unwrap_or_default(),
         // One event or several, as a JSON value per line.
         None => input
@@ -1300,6 +1572,185 @@ mod tests {
             from_hook(Agent::Gemini, &note)[0].text.as_deref(),
             Some("Allow npm test?")
         );
+    }
+
+    #[test]
+    fn copilot_hooks_become_events() {
+        // Copilot's payloads don't name their event; the hook command does.
+        let pre = json!({"sessionId": "s1", "timestamp": 1, "cwd": "/w",
+                         "toolName": "bash", "toolArgs": "{\"command\":\"cargo test\",\"description\":\"Run tests\"}"});
+        let e = &from_hook_as(Agent::Copilot, &pre, Some("preToolUse"))[0];
+        assert_eq!(
+            (e.kind.as_str(), e.command.as_deref(), e.cwd.as_deref()),
+            ("command_start", Some("cargo test"), Some("/w"))
+        );
+        assert_eq!(e.source, "copilot");
+
+        let post = json!({"sessionId": "s1", "cwd": "/w", "toolName": "bash",
+                          "toolArgs": {"command": "cargo test"},
+                          "toolResult": {"resultType": "success", "textResultForLlm": "test result: ok\n<exited with exit code 0>"}});
+        let e = &from_hook_as(Agent::Copilot, &post, Some("postToolUse"))[0];
+        assert_eq!(
+            (e.kind.as_str(), e.exit, e.output.as_deref(), e.failed),
+            ("command", Some(0), Some("test result: ok"), false)
+        );
+        let failed = json!({"toolName": "bash", "toolArgs": {"command": "false"},
+                            "toolResult": {"resultType": "failure", "textResultForLlm": "Command failed with exit code 1"}});
+        let e = &from_hook_as(Agent::Copilot, &failed, Some("postToolUse"))[0];
+        assert_eq!((e.exit, e.failed), (Some(1), true));
+
+        let edit = json!({"toolName": "edit", "toolArgs": {"path": "/w/src/lib.rs", "old_str": "a", "new_str": "b"},
+                          "toolResult": {"resultType": "success", "textResultForLlm": "ok"}});
+        assert_eq!(
+            from_hook_as(Agent::Copilot, &edit, Some("postToolUse"))[0]
+                .path
+                .as_deref(),
+            Some("/w/src/lib.rs")
+        );
+        let prompt = json!({"prompt": "fix the build"});
+        let e = &from_hook_as(Agent::Copilot, &prompt, Some("userPromptSubmitted"))[0];
+        assert_eq!(
+            (e.kind.as_str(), e.text.as_deref()),
+            ("prompt", Some("fix the build"))
+        );
+        let stop = json!({"stopReason": "end_turn"});
+        assert_eq!(
+            from_hook_as(Agent::Copilot, &stop, Some("agentStop"))[0].kind,
+            "done"
+        );
+        // The payload seen live from Copilot 1.0.92.
+        let end = json!({"sessionId": "f8d3", "timestamp": 1791681085616u64, "cwd": "/w", "reason": "user_exit"});
+        let e = &from_hook_as(Agent::Copilot, &end, Some("sessionEnd"))[0];
+        assert_eq!(
+            (e.kind.as_str(), e.text.as_deref()),
+            ("session_end", Some("user_exit"))
+        );
+        // An event it doesn't know: nothing.
+        assert!(from_hook_as(Agent::Copilot, &end, Some("preCompact")).is_empty());
+    }
+
+    #[test]
+    fn copilot_plugin_names_each_event_on_its_hook() {
+        let [(manifest, m), (hooks, h)] = copilot_plugin("/bin/cyberterm +hook copilot");
+        assert_eq!((manifest, hooks), ("plugin.json", "hooks.json"));
+        let m: Value = serde_json::from_str(&m).unwrap();
+        assert_eq!(m["name"], "cyberterm");
+        let h: Value = serde_json::from_str(&h).unwrap();
+        assert_eq!(h["version"], 1);
+        assert_eq!(
+            h["hooks"]["postToolUse"][0]["bash"],
+            "/bin/cyberterm +hook copilot postToolUse"
+        );
+        assert_eq!(h["hooks"]["agentStop"][0]["timeoutSec"], 10);
+    }
+
+    #[test]
+    fn cursor_hooks_become_events() {
+        let pre = json!({"hook_event_name": "preToolUse", "conversation_id": "c", "tool_name": "Shell",
+                         "tool_input": {"command": "pytest -q", "working_directory": "/w"},
+                         "tool_use_id": "t1", "cwd": "/w"});
+        let e = &from_hook(Agent::Cursor, &pre)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.command.as_deref(), e.id.as_deref()),
+            ("command_start", Some("pytest -q"), Some("t1"))
+        );
+        let post = json!({"hook_event_name": "postToolUse", "tool_name": "Shell",
+                          "tool_input": {"command": "pytest -q"}, "tool_use_id": "t1", "cwd": "/w",
+                          "tool_output": "{\"exitCode\":1,\"stdout\":\"1 failed\",\"stderr\":\"\"}", "duration": 812});
+        let e = &from_hook(Agent::Cursor, &post)[0];
+        assert_eq!(
+            (
+                e.kind.as_str(),
+                e.exit,
+                e.output.as_deref(),
+                e.id.as_deref()
+            ),
+            ("command", Some(1), Some("1 failed"), Some("t1"))
+        );
+        // Edits come from afterFileEdit, once: not again as a tool call.
+        let edit = json!({"hook_event_name": "afterFileEdit", "file_path": "/w/app.py",
+                          "edits": [{"old_string": "a", "new_string": "b"}], "workspace_roots": ["/w"]});
+        let e = &from_hook(Agent::Cursor, &edit)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.path.as_deref(), e.cwd.as_deref()),
+            ("edit", Some("/w/app.py"), Some("/w"))
+        );
+        let write_tool = json!({"hook_event_name": "postToolUse", "tool_name": "Write",
+                                "tool_input": {"path": "/w/app.py"}, "tool_output": "{}"});
+        assert!(from_hook(Agent::Cursor, &write_tool).is_empty());
+        let read_tool = json!({"hook_event_name": "postToolUse", "tool_name": "Read",
+                               "tool_input": {"path": "/w/README.md"}, "tool_output": "{}"});
+        assert_eq!(from_hook(Agent::Cursor, &read_tool)[0].kind, "tool");
+        let stop = json!({"hook_event_name": "stop", "status": "completed", "loop_count": 0});
+        assert_eq!(from_hook(Agent::Cursor, &stop)[0].kind, "done");
+        let prompt = json!({"hook_event_name": "beforeSubmitPrompt", "prompt": "add tests"});
+        assert_eq!(from_hook(Agent::Cursor, &prompt)[0].kind, "prompt");
+    }
+
+    #[test]
+    fn hermes_hooks_become_events() {
+        // What Cyberterm's Hermes plugin sends: the hook's kwargs, named.
+        let pre = json!({"hook_event_name": "pre_tool_call", "tool_name": "terminal",
+                         "args": {"command": "make test"}, "tool_call_id": "call_1",
+                         "session_id": "s", "cwd": "/w"});
+        let e = &from_hook(Agent::Hermes, &pre)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.command.as_deref(), e.id.as_deref()),
+            ("command_start", Some("make test"), Some("call_1"))
+        );
+        let post = json!({"hook_event_name": "post_tool_call", "tool_name": "terminal",
+                          "args": {"command": "make test"}, "tool_call_id": "call_1", "status": "success",
+                          "result": "{\"output\": \"ok\", \"exit_code\": 2, \"error\": null}", "duration_ms": 900});
+        let e = &from_hook(Agent::Hermes, &post)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.exit, e.output.as_deref()),
+            ("command", Some(2), Some("ok"))
+        );
+        let patch = json!({"hook_event_name": "post_tool_call", "tool_name": "patch", "status": "success",
+                           "args": {"path": "/w/a.py", "old_string": "x", "new_string": "y"}, "result": "diff"});
+        assert_eq!(
+            from_hook(Agent::Hermes, &patch)[0].path.as_deref(),
+            Some("/w/a.py")
+        );
+        let v4a = json!({"hook_event_name": "post_tool_call", "tool_name": "patch", "status": "success",
+                         "args": {"mode": "patch", "patch": "*** Begin Patch\n*** Update File: b.py\n*** Add File: c.py\n*** End Patch"}});
+        let paths: Vec<_> = from_hook(Agent::Hermes, &v4a)
+            .into_iter()
+            .filter_map(|e| e.path)
+            .collect();
+        assert_eq!(paths, ["b.py", "c.py"]);
+        let failed = json!({"hook_event_name": "post_tool_call", "tool_name": "read_file", "status": "error",
+                            "args": {"path": "/w/x"}, "error_message": "no such file"});
+        assert!(from_hook(Agent::Hermes, &failed)[0].failed);
+
+        let prompt = json!({"hook_event_name": "pre_llm_call", "user_message": "fix it",
+                            "conversation_history": [], "is_first_turn": true});
+        assert_eq!(
+            from_hook(Agent::Hermes, &prompt)[0].text.as_deref(),
+            Some("fix it")
+        );
+        let ask = json!({"hook_event_name": "pre_approval_request", "command": "rm -rf build",
+                         "description": "Delete the build folder?"});
+        let e = &from_hook(Agent::Hermes, &ask)[0];
+        assert_eq!(
+            (e.kind.as_str(), e.text.as_deref()),
+            ("waiting", Some("Delete the build folder?"))
+        );
+        // on_session_end: the end of a turn, or (without one) of the session.
+        let turn = json!({"hook_event_name": "on_session_end", "turn_id": "t3", "completed": true});
+        assert_eq!(from_hook(Agent::Hermes, &turn)[0].kind, "done");
+        let exit =
+            json!({"hook_event_name": "on_session_end", "session_id": "s", "reason": "exit"});
+        assert_eq!(from_hook(Agent::Hermes, &exit)[0].kind, "session_end");
+    }
+
+    #[test]
+    fn every_agent_has_a_name_and_events() {
+        for agent in Agent::ALL {
+            assert_eq!(Agent::parse(agent.name()), Some(agent));
+            assert!(!hook_events(agent).is_empty());
+        }
+        assert_eq!(Agent::parse("event"), None);
     }
 
     #[test]
