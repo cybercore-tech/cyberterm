@@ -1,6 +1,6 @@
 [package]
 name = "cyberterm"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.88"
 description = "A GPU terminal for developers: splits and sessions, command blocks, searchable history, AI help, inline images and Lua scripting"

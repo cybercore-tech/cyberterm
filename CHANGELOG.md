@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 0.4.0 — 2026-10-10
+
+**Parallel agents:** native flight logs for six agents, the agent home, the Tower, merge or discard, and several agents on one task.
+
 ### Added
 - **Several agents on one task** (`cyberterm +agent claude,codex,gemini "task"`): one attempt each, in their own worktrees and tabs, grouped in the Tower so you can compare them. Merging one offers to discard the rest.
 - **Quit and merge:** for an agent that finished but is still open, the Tower's merge and discard offer to quit it first, then close its tab.
