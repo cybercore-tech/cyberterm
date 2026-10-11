@@ -327,6 +327,11 @@ pub fn handle_arguments(
         }
 
         "+agent" | "+agents" => {
+            use std::io::IsTerminal;
+            if args.len() == 2 && std::io::stdout().is_terminal() {
+                crate::agent_home::run(&current_config, config_root);
+                return CliAction::ExitCleanly;
+            }
             let code = crate::agent::run_cli(&args[2..], &current_config.agents);
             if code != 0 {
                 std::process::exit(code);

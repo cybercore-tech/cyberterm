@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- **The agent home** (`cyberterm +agent` on its own): the Cyberterm wordmark in your theme's colours, the agents found here with how much each tells the flight log (and the setup step that would give more), your agent sessions with their state and lines changed, and the keys for the Flight log and Changes. Piped, `+agent` still prints the plain listing.
 - **Codex and Gemini CLI report to the flight log** like Claude Code does: prompts, command output and exit codes, edits, other tools, and when they need you or are done.
   - **Codex:** hooks per session; you approve them once in Codex.
   - **Gemini:** `cyberterm +agent setup gemini` installs them; they're inert outside Cyberterm.

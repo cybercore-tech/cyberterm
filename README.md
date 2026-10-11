@@ -305,7 +305,7 @@ Run any coding agent in a git worktree of its own, in a tab of its own:
 
 ```bash
 cyberterm +agent claude fix the flaky login test   # or codex, gemini, copilot, opencode, crush, ...
-cyberterm +agent                                   # the agents found here, and your sessions
+cyberterm +agent                                   # the agent home: your agents and sessions at a glance
 cyberterm +agent rm fix-the-flaky-login            # remove it and its worktree when you're done
 ```
 
