@@ -3,6 +3,7 @@
 
 mod agent;
 mod agent_home;
+mod agent_merge;
 mod agent_setup;
 mod ai;
 mod app;

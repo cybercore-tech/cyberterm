@@ -273,6 +273,10 @@ pub struct Worktree {
     pub base: String,
     /// The repository it was made from.
     pub repo: PathBuf,
+    /// The branch checked out there when it started: where `+agent merge`
+    /// takes its work back to (older sessions: the repository's branch).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onto: Option<String>,
 }
 
 impl Session {
@@ -319,7 +323,7 @@ pub fn load(id: &str) -> Result<Session, String> {
     load_in(&state_dir(), id)
 }
 
-fn load_in(dir: &Path, id: &str) -> Result<Session, String> {
+pub(crate) fn load_in(dir: &Path, id: &str) -> Result<Session, String> {
     if !valid_id(id) {
         return Err(format!("no agent session {id:?}"));
     }
@@ -397,7 +401,11 @@ pub fn create(cfg: &AgentsConfig, req: Request<'_>) -> Result<Session, String> {
     create_in(&state_dir(), cfg, req)
 }
 
-fn create_in(state: &Path, cfg: &AgentsConfig, req: Request<'_>) -> Result<Session, String> {
+pub(crate) fn create_in(
+    state: &Path,
+    cfg: &AgentsConfig,
+    req: Request<'_>,
+) -> Result<Session, String> {
     let task = req.task.filter(|t| !t.trim().is_empty());
     let base_slug = slug(task.as_deref(), &req.launcher.name);
     let repo = if req.worktree {
@@ -440,6 +448,9 @@ fn create_in(state: &Path, cfg: &AgentsConfig, req: Request<'_>) -> Result<Sessi
             let path = worktree_root(top).join(format!("{}-{id}", repo_name(top)));
             let branch = format!("agent/{id}");
             let base = git(top, &["rev-parse", "HEAD"])?;
+            let onto = git(top, &["symbolic-ref", "--short", "-q", "HEAD"])
+                .ok()
+                .filter(|b| !b.is_empty());
             git(
                 top,
                 &[
@@ -463,6 +474,7 @@ fn create_in(state: &Path, cfg: &AgentsConfig, req: Request<'_>) -> Result<Sessi
                     branch,
                     base,
                     repo: top.clone(),
+                    onto,
                 }),
             )
         }
@@ -643,7 +655,7 @@ pub fn remove(id: &str, force: bool) -> Result<String, String> {
     remove_in(&state_dir(), id, force)
 }
 
-fn remove_in(state: &Path, id: &str, force: bool) -> Result<String, String> {
+pub(crate) fn remove_in(state: &Path, id: &str, force: bool) -> Result<String, String> {
     let s = load_in(state, id)?;
     let st = status(&s);
     if st.running {
@@ -699,7 +711,7 @@ fn remove_in(state: &Path, id: &str, force: bool) -> Result<String, String> {
 // git
 // ----------------------------------------------------------------------
 
-fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
+pub(crate) fn git(dir: &Path, args: &[&str]) -> Result<String, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -724,7 +736,7 @@ fn git_toplevel(dir: &Path) -> Option<PathBuf> {
         .filter(|p| p.is_dir())
 }
 
-fn branch_exists(repo: &Path, branch: &str) -> bool {
+pub(crate) fn branch_exists(repo: &Path, branch: &str) -> bool {
     git(
         repo,
         &[
@@ -771,6 +783,11 @@ cyberterm +agent: run any coding agent in a worktree of its own
                                          (-o with output, -f keep following)
   cyberterm +agent setup [agent]         what each agent reports; opt-in hooks
                                          (Gemini, Cursor, Hermes)
+  cyberterm +agent merge <id>            bring its work into the branch it started from
+      --squash | --merge | --ff          one commit (default), a merge commit, or fast-forward
+      --check                            show what it would do; change nothing
+      --keep                             keep the worktree, branch and session afterwards
+  cyberterm +agent discard <id> [--yes]  throw its work away: worktree, branch and session
   cyberterm +agent rm <id> [--force]     remove a session and its worktree
                                          (--force: even with changes or commits)
 
@@ -808,6 +825,8 @@ pub fn run_cli(args: &[String], cfg: &AgentsConfig) -> i32 {
             }
         }
         Some("setup") => crate::agent_setup::run(&args[1..], cfg),
+        Some("merge") => crate::agent_merge::run_merge(&args[1..], cfg),
+        Some("discard") => crate::agent_merge::run_discard(&args[1..]),
         Some("log") => {
             let follow = args.iter().any(|a| a == "-f" || a == "--follow");
             let output = args.iter().any(|a| a == "-o" || a == "--output");

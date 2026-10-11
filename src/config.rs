@@ -473,6 +473,9 @@ pub struct AgentsConfig {
     pub panel: bool,
     /// The panel's width in columns; 0 sizes it to the window.
     pub panel_width: usize,
+    /// How `+agent merge` brings a session's work back: "squash" (one
+    /// commit), "merge" (a merge commit) or "ff" (fast-forward only).
+    pub merge: String,
     /// Agents to offer besides the known ones found on PATH, or overrides
     /// for them (`[agents.launch.<name>]`).
     pub launch: std::collections::BTreeMap<String, AgentLaunch>,
@@ -505,6 +508,7 @@ impl Default for AgentsConfig {
             hooks: true,
             panel: true,
             panel_width: 0,
+            merge: "squash".into(),
             launch: Default::default(),
         }
     }
