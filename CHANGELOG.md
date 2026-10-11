@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Added
+- **Copilot CLI, Cursor and Hermes report to the flight log** like Claude Code, Codex and Gemini CLI do: prompts, command output and exit codes, edits, other tools, and when they need you or are done. Each appears lit in the agent home once it reports.
+  - **Copilot CLI:** hooks per session, through a plugin of Cyberterm's own; nothing to set up.
+  - **Cursor:** `cyberterm +agent setup cursor` adds them to `~/.cursor/hooks.json`.
+  - **Hermes:** `cyberterm +agent setup hermes` adds a plugin and enables it through Hermes's own `hermes plugins enable`.
+  - As with Gemini, what setup installs does nothing outside Cyberterm's agent sessions, and `--remove` takes it out.
 - **The agent home** (`cyberterm +agent` on its own): the Cyberterm wordmark in your theme's colours, the agents found here with how much each tells the flight log (and the setup step that would give more), your agent sessions with their state and lines changed, and the keys for the Flight log and Changes. Piped, `+agent` still prints the plain listing.
 - **Codex and Gemini CLI report to the flight log** like Claude Code does: prompts, command output and exit codes, edits, other tools, and when they need you or are done.
   - **Codex:** hooks per session; you approve them once in Codex.
