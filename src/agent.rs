@@ -737,7 +737,7 @@ fn expand_home(path: &str) -> PathBuf {
 const HELP: &str = "\
 cyberterm +agent: run any coding agent in a worktree of its own
 
-  cyberterm +agent                       the agents found here, and your sessions
+  cyberterm +agent                       the agent home: your agents and sessions
   cyberterm +agent <name> [task...]      start one in a new tab, in a new worktree
       --no-worktree                      run it in this directory instead
       --here                             run it in this terminal, not a new tab

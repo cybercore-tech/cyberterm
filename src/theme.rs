@@ -77,6 +77,17 @@ impl ThemeRegistry {
         Some(active)
     }
 
+    /// The theme to start with: the shared Cybercore one when it's active,
+    /// else the configured one, else the first.
+    pub fn initial(&self, shared_active: Option<&str>, configured: &str) -> Option<Theme> {
+        self.themes
+            .iter()
+            .find(|t| Some(t.name.as_str()) == shared_active)
+            .or_else(|| self.themes.iter().find(|t| t.name == configured))
+            .or_else(|| self.themes.first())
+            .cloned()
+    }
+
     /// Groups themes by family (built-in first, the Cybercore families next,
     /// then installed collections) and sorts by name within each.
     pub fn sort(&mut self) {

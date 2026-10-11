@@ -162,16 +162,43 @@ fn update(path: &Path, agent: Agent, command: &str, remove: bool) -> Result<Stri
     Ok(note)
 }
 
+/// How much the flight log gets from an agent.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Coverage {
+    /// Its own hooks report prompts, output, edits and waits; otherwise
+    /// only the commands the shell recorder sees.
+    pub full: bool,
+    /// How: "hooks · per session", "commands".
+    pub note: &'static str,
+    /// The command that would give it more, when there is one.
+    pub setup: Option<&'static str>,
+}
+
+/// Coverage for an agent by its adapter (`crate::agent::adapter`).
+pub fn coverage_of(adapter: Option<&str>) -> Coverage {
+    let (full, note, setup) = match adapter {
+        Some("claude") => (true, "hooks · per session", None),
+        Some("codex") => (true, "hooks · approve once", None),
+        Some("gemini") => match installed(&gemini_settings_path(), Agent::Gemini) {
+            Some(true) => (true, "hooks · set up", None),
+            _ => (false, "commands", Some("+agent setup gemini")),
+        },
+        _ => (false, "commands", None),
+    };
+    Coverage { full, note, setup }
+}
+
 /// What the flight log gets from an agent, for listings.
 pub fn coverage(name: &str) -> String {
-    match name {
-        "claude" => "full: hooks, per session".into(),
-        "codex" => "full: hooks, per session (approve them once in Codex)".into(),
-        "gemini" => match installed(&gemini_settings_path(), Agent::Gemini) {
-            Some(true) => "full: hooks (set up)".into(),
-            _ => "commands only -- `cyberterm +agent setup gemini` for more".into(),
-        },
-        _ => "commands (shell recorder)".into(),
+    let c = coverage_of(Some(name));
+    match (c.full, c.setup) {
+        (true, _) if name == "codex" => {
+            "full: hooks, per session (approve them once in Codex)".into()
+        }
+        (true, _) if name == "gemini" => "full: hooks (set up)".into(),
+        (true, _) => "full: hooks, per session".into(),
+        (false, Some(setup)) => format!("commands only -- `cyberterm {setup}` for more"),
+        (false, None) => "commands (shell recorder)".into(),
     }
 }
 

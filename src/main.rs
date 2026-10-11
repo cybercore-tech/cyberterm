@@ -2,6 +2,7 @@
 // The ultimate, scriptable, vintage-meets-modern terminal engine.
 
 mod agent;
+mod agent_home;
 mod agent_setup;
 mod ai;
 mod app;
@@ -95,18 +96,7 @@ fn main() {
     let shared_revision = cybercore::theme::ThemeCatalog::load()
         .map(|catalog| catalog.revision())
         .unwrap_or_default();
-    let initial_theme = registry
-        .themes
-        .iter()
-        .find(|t| Some(t.name.as_str()) == shared_active.as_deref())
-        .or_else(|| {
-            registry
-                .themes
-                .iter()
-                .find(|t| t.name == cyber_config.theme)
-        })
-        .or_else(|| registry.themes.first())
-        .cloned();
+    let initial_theme = registry.initial(shared_active.as_deref(), &cyber_config.theme);
     if let Some(index) = initial_theme
         .as_ref()
         .and_then(|t| registry.themes.iter().position(|r| r.name == t.name))
