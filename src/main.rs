@@ -2,6 +2,7 @@
 // The ultimate, scriptable, vintage-meets-modern terminal engine.
 
 mod agent;
+mod agent_setup;
 mod ai;
 mod app;
 mod blocks;
