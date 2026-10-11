@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Added
+- **The Tower** (`Ctrl+Shift+S`): every agent session at once.
+  - **What it shows:** the sessions on the left (state, agent, branch, lines changed); the selected one's flight log on the right.
+  - **Keys:** **↵** jumps to its tab, **c** opens its Changes, **m** merges it, **d** discards it (both after asking), **n** starts a new agent.
 - **Merge or discard an agent's work** (`cyberterm +agent merge <id>`, `cyberterm +agent discard <id>`).
   - **Merge** brings the session's branch into the branch it started from: one squashed commit by default, or a merge commit (`--merge`), or a fast-forward (`--ff`).
   - **Safe:** it checks everything first and changes nothing if it can't finish (agent still running, your checkout busy or on another branch, conflicts found with `git merge-tree`). `--check` previews.
@@ -19,6 +22,7 @@
 - **`cyberterm +agent setup`** shows what each agent reports and installs the opt-in hooks; `--remove` takes them out.
 
 ### Fixed
+- Messages from the Changes view (like "Reverted …") were hidden behind it.
 - `+agent rm` left the session's flight log behind.
 - The shell recorder logged agents running Cyberterm's own hooks as commands.
 

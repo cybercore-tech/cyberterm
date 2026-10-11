@@ -38,6 +38,11 @@ impl App {
             self.lua_set_status("No agent session in this tab (start one: New agent)", true);
             return;
         };
+        self.open_changes_for(session);
+    }
+
+    /// Opens the view for `session`.
+    pub(super) fn open_changes_for(&mut self, session: crate::agent::Session) {
         let Some(w) = session.worktree.clone() else {
             self.lua_set_status(
                 &format!(
@@ -233,7 +238,7 @@ impl App {
             .confirm
             .as_ref()
             .map(|p| format!("Put {p} back the way it was when the agent started?"));
-        let frame = ui::changes_view::build(
+        let mut frame = ui::changes_view::build(
             &ui::changes_view::View {
                 title: &title,
                 branch: ui.session.worktree.as_ref().map(|w| w.branch.as_str()),
@@ -246,6 +251,7 @@ impl App {
             rows,
             &colors,
         );
+        self.draw_lua_status(&mut frame);
         list.panes.push((area, frame, 0.0, 0.0));
     }
 }

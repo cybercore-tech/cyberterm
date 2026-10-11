@@ -187,7 +187,7 @@ impl App {
     /// A tab's agent: its state (with "needs you" from a desktop
     /// notification the agent sent, if that's newer than its log), whether
     /// it's still running, and what it's waiting for.
-    fn agent_state(&self, tab: TabId) -> Option<(State, bool, Option<String>)> {
+    pub(super) fn agent_state(&self, tab: TabId) -> Option<(State, bool, Option<String>)> {
         let id = self.flight.tab_session.get(&tab)?;
         let log = self.flight.logs.get(id)?;
         let t = self.tabs.iter().find(|t| t.id == tab)?;
@@ -324,6 +324,13 @@ impl App {
     /// The agent session a tab shows.
     pub(super) fn flight_session(&self, tab: TabId) -> Option<String> {
         self.flight.tab_session.get(&tab).cloned()
+    }
+
+    /// The tab (its index) showing agent session `id`, if one does.
+    pub(super) fn tab_for_session(&self, id: &str) -> Option<usize> {
+        self.tabs
+            .iter()
+            .position(|t| self.flight.tab_session.get(&t.id).is_some_and(|s| s == id))
     }
 
     fn panel_entries(&self, tab: TabId) -> &[Entry] {

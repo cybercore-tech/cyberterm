@@ -57,6 +57,9 @@ impl App {
         if self.changes_open() && self.changes_key(&event) {
             return;
         }
+        if self.tower_open() && !self.changes_open() && self.tower_key(&event) {
+            return;
+        }
         if self.flight.focused && self.flight_key(&event) {
             return;
         }
@@ -214,6 +217,7 @@ impl App {
             Action::Rewind => self.toggle_rewind(),
             Action::CommandPalette => self.toggle_command_palette(),
             Action::FlightLog => self.toggle_flight_log(),
+            Action::Tower => self.toggle_tower(),
             Action::AgentChanges => {
                 if self.changes_open() {
                     self.changes_ui = None;

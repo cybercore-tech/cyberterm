@@ -66,6 +66,19 @@ impl App {
         self.request_redraw();
     }
 
+    /// Opens the palette with `query` already typed.
+    pub(super) fn open_command_palette_with(&mut self, query: &str) {
+        if self.command_palette.is_none() {
+            self.toggle_command_palette();
+        }
+        if let Some(mut p) = self.command_palette.take() {
+            p.query = query.to_string();
+            self.palette_filter(&mut p);
+            self.command_palette = Some(p);
+        }
+        self.request_redraw();
+    }
+
     fn palette_items(&self) -> Vec<Item> {
         let mut items = Vec::new();
         for (action, _name, description) in ACTIONS {
