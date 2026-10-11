@@ -53,6 +53,23 @@ fn put_runs(
     c
 }
 
+/// `s` shortened in the middle, so both ends show: a task's attempts
+/// share their start and differ at the end (the agent).
+fn fit_middle(s: &str, width: usize) -> String {
+    let n = s.chars().count();
+    if n <= width {
+        return s.to_string();
+    }
+    if width < 5 {
+        return fit(s, width);
+    }
+    let tail = (width - 1) * 11 / 20;
+    let head = width - 1 - tail;
+    let start: String = s.chars().take(head).collect();
+    let end: String = s.chars().skip(n - tail).collect();
+    format!("{start}…{end}")
+}
+
 fn fit(s: &str, width: usize) -> String {
     if s.chars().count() <= width {
         return s.to_string();
@@ -207,7 +224,7 @@ pub fn build(v: &View<'_>, cols: usize, rows: usize, c: &Colors) -> Frame {
         let state_w = state.chars().count();
         let right = cols.saturating_sub(state_w + 1);
         let name_w = right.saturating_sub(4 + 10).max(6);
-        let name = fit(&s.id, name_w);
+        let name = fit_middle(&s.id, name_w);
         let at = put_runs(&mut f, row, 1, right, &[(glyph, glyph_c)], bg);
         let at = at.max(4);
         let at = put_runs(&mut f, row, at, right, &[(&name, c.fg)], bg);
@@ -263,6 +280,19 @@ pub fn build(v: &View<'_>, cols: usize, rows: usize, c: &Colors) -> Frame {
             &runs,
             bg,
         );
+        // Attempts at one task: a bar down their left edge, joined
+        // across the gap to the next attempt.
+        if s.group.is_some() {
+            let next_same = v
+                .rows
+                .get(i + 1)
+                .is_some_and(|n| n.group.is_some() && n.group == s.group);
+            let reach = if next_same { PER_SESSION } else { 2 };
+            for r in row..(row + reach).min(body.end) {
+                let cell_bg = if r < row + 2 { bg } else { c.bg };
+                f.put(r, 0, "▎", c.accent, cell_bg);
+            }
+        }
         row += PER_SESSION;
     }
     f
@@ -300,6 +330,7 @@ mod tests {
             changes,
             running: mark != Mark::Stopped,
             commits,
+            group: None,
         }
     }
 
@@ -355,6 +386,41 @@ mod tests {
         assert_eq!(f.row(5)[30].bg, [40; 3]);
         assert_eq!(f.row(6)[30].bg, [40; 3]);
         assert_eq!(f.row(2)[30].bg, [0; 3]);
+    }
+
+    #[test]
+    fn long_names_keep_both_ends() {
+        assert_eq!(
+            fit_middle("make-the-health-test-demo-2", 14),
+            "make-t…-demo-2"
+        );
+        assert_eq!(fit_middle("short", 14), "short");
+    }
+
+    #[test]
+    fn attempts_at_one_task_are_joined_by_a_bar() {
+        let mut rows = vec![
+            row("fix-it-claude", Mark::Done, Some((5, 1, 1)), 1),
+            row("fix-it-codex", Mark::Working, Some((9, 3, 2)), 0),
+            row("other", Mark::Stopped, None, 0),
+        ];
+        rows[0].group = Some("fix-it-1".into());
+        rows[1].group = Some("fix-it-1".into());
+        let v = View {
+            rows: &rows,
+            selected: 2,
+            keys: true,
+            loading: false,
+        };
+        let f = build(&v, 60, 14, &colors());
+        let bar = |r: usize| f.row(r)[0].ch;
+        // Both lines of each attempt, and the gap between them.
+        for r in 2..7 {
+            assert_eq!(bar(r), '▎', "row {r}");
+        }
+        // Not past the last attempt, nor on the ungrouped session.
+        assert_eq!(bar(7), ' ');
+        assert_eq!(bar(8), ' ');
     }
 
     #[test]

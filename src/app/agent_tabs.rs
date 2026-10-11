@@ -520,6 +520,7 @@ impl App {
                 task: None,
                 cwd,
                 worktree: self.config.agents.worktrees,
+                group: None,
             },
         ) {
             Ok(s) => s,

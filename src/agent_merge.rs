@@ -364,6 +364,10 @@ pub fn merge_in(state: &Path, id: &str, strategy: Strategy, keep: bool) -> Resul
         strategy.name(),
         if n == 1 { "" } else { "s" }
     );
+    let others: Vec<String> = crate::agent::siblings_in(state, &s)
+        .into_iter()
+        .map(|o| o.id)
+        .collect();
     if !keep {
         crate::agent::remove_in(state, id, true)?;
         if crate::agent::branch_exists(&w.repo, &w.branch) {
@@ -371,20 +375,56 @@ pub fn merge_in(state: &Path, id: &str, strategy: Strategy, keep: bool) -> Resul
         }
         note.push_str("; removed its worktree, branch and session");
     }
+    if !others.is_empty() {
+        note.push_str(&format!(
+            "\n   The other attempts at this task are still there: cyberterm +agent discard {}",
+            others.join(" ")
+        ));
+    }
     Ok(note)
+}
+
+/// Ends a session's agent -- every process carrying its id, which is the
+/// agent and whatever it started -- with SIGTERM, and waits up to five
+/// seconds for them to go. For an agent that finished its turn but stays
+/// open (most do), before merging or discarding its work.
+pub fn stop_agent(id: &str) -> Result<(), String> {
+    let pids = crate::procs::with_env("CYBERTERM_AGENT_ID", id);
+    for &pid in &pids {
+        // SAFETY: plain kill(2) on a pid read from /proc.
+        unsafe {
+            libc::kill(pid as libc::pid_t, libc::SIGTERM);
+        }
+    }
+    for _ in 0..50 {
+        if crate::procs::with_env("CYBERTERM_AGENT_ID", id).is_empty() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    Err(format!(
+        "{id}'s agent didn't quit; quit it in its tab first"
+    ))
 }
 
 /// Removes session `id` with its worktree and branch, work and all.
 pub fn discard_in(state: &Path, id: &str) -> Result<String, String> {
     let s = crate::agent::load_in(state, id)?;
     let note = crate::agent::remove_in(state, id, true)?;
-    if let Some(w) = &s.worktree {
-        if crate::agent::branch_exists(&w.repo, &w.branch) {
-            git(&w.repo, &["branch", "-D", &w.branch])?;
-            return Ok(format!("{note}, deleted branch {}", w.branch));
-        }
+    let Some(w) = &s.worktree else {
+        return Ok(note);
+    };
+    if crate::agent::branch_exists(&w.repo, &w.branch) {
+        git(&w.repo, &["branch", "-D", &w.branch])?;
     }
-    Ok(note)
+    // remove_in says it kept a branch that has commits; here it's gone.
+    let mut parts: Vec<&str> = note
+        .split(", ")
+        .filter(|p| !p.starts_with("kept branch") && !p.starts_with("deleted branch"))
+        .collect();
+    let deleted = format!("deleted branch {}", w.branch);
+    parts.insert(1.min(parts.len()), &deleted);
+    Ok(parts.join(", "))
 }
 
 // ----------------------------------------------------------------------
@@ -583,8 +623,12 @@ mod tests {
     }
 
     fn session(f: &Fixture, task: &str) -> Session {
+        attempt(f, task, "demo", None)
+    }
+
+    fn attempt(f: &Fixture, task: &str, agent: &str, group: Option<&str>) -> Session {
         let l = Launcher {
-            name: "demo".into(),
+            name: agent.into(),
             label: "Demo agent".into(),
             argv: vec!["true".into()],
             prompt: Prompt::Positional,
@@ -597,6 +641,7 @@ mod tests {
                 task: Some(task.into()),
                 cwd: f.repo.clone(),
                 worktree: true,
+                group: group.map(str::to_string),
             },
         )
         .unwrap()
@@ -751,6 +796,7 @@ mod tests {
         git(&wt(&s), &["commit", "-qm", "x"]).unwrap();
         let note = discard_in(&f.state, &s.id).unwrap();
         assert!(note.contains("deleted branch agent/throwaway"), "{note}");
+        assert!(!note.contains("kept branch"), "{note}");
         assert!(!wt(&s).exists());
         assert!(!crate::agent::branch_exists(&f.repo, "agent/throwaway"));
         assert_eq!(log(&f.repo), ["init"]);
@@ -760,6 +806,36 @@ mod tests {
         let note = merge_in(&f.state, &t.id, Strategy::Squash, false).unwrap();
         assert!(note.starts_with("nothing to merge"), "{note}");
         assert!(wt(&t).is_dir());
+    }
+
+    #[test]
+    fn attempts_at_one_task_are_named_by_agent_and_point_at_each_other() {
+        let f = fixture("group");
+        let a = attempt(&f, "fix the flaky test", "claude", Some("g1"));
+        let b = attempt(&f, "fix the flaky test", "codex", Some("g1"));
+        let lone = session(&f, "something else");
+        assert_eq!(a.id, "fix-the-flaky-test-claude");
+        assert_eq!(b.id, "fix-the-flaky-test-codex");
+        assert_eq!(
+            b.worktree.as_ref().unwrap().branch,
+            "agent/fix-the-flaky-test-codex"
+        );
+        let ids = |v: Vec<Session>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(
+            ids(crate::agent::siblings_in(&f.state, &a)),
+            [b.id.as_str()]
+        );
+        assert!(crate::agent::siblings_in(&f.state, &lone).is_empty());
+
+        // Merging one says how to drop the others.
+        std::fs::write(wt(&a).join("fix.txt"), "fixed\n").unwrap();
+        let note = merge_in(&f.state, &a.id, Strategy::Squash, false).unwrap();
+        assert!(
+            note.contains("other attempts at this task are still there: cyberterm +agent discard fix-the-flaky-test-codex"),
+            "{note}"
+        );
+        // Once it's merged it's gone, and the last attempt stands alone.
+        assert!(crate::agent::siblings_in(&f.state, &b).is_empty());
     }
 
     #[test]

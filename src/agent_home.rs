@@ -45,6 +45,8 @@ pub struct SessionRow {
     pub running: bool,
     /// Commits on its branch since it started.
     pub commits: usize,
+    /// The group of attempts at one task it's part of.
+    pub group: Option<String>,
 }
 
 pub struct Home {
@@ -761,6 +763,7 @@ pub fn session_row(s: &crate::agent::Session, now: u64) -> SessionRow {
         changes,
         running: st.running,
         commits: st.commits,
+        group: s.group.clone(),
     }
 }
 
@@ -884,6 +887,7 @@ mod tests {
                     changes: Some((42, 7, 3)),
                     running: true,
                     commits: 1,
+                    group: None,
                 },
                 SessionRow {
                     id: "add-auth".into(),
@@ -894,6 +898,7 @@ mod tests {
                     changes: Some((0, 0, 0)),
                     running: true,
                     commits: 0,
+                    group: None,
                 },
             ],
             more: 2,
