@@ -264,6 +264,11 @@ pub struct Session {
     /// when the agent runs in place.
     pub worktree: Option<Worktree>,
     pub created_ms: u64,
+    /// Sessions started together on one task (`+agent claude,codex
+    /// "task"`) share a group: the attempts to compare, keep one of and
+    /// discard the rest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -393,6 +398,8 @@ pub struct Request<'a> {
     /// Where the agent was asked for (the current pane's directory).
     pub cwd: PathBuf,
     pub worktree: bool,
+    /// The group of attempts it's one of, if any.
+    pub group: Option<String>,
 }
 
 /// Creates a session: its worktree (when `worktree` is set and `cwd` is in
@@ -407,7 +414,15 @@ pub(crate) fn create_in(
     req: Request<'_>,
 ) -> Result<Session, String> {
     let task = req.task.filter(|t| !t.trim().is_empty());
-    let base_slug = slug(task.as_deref(), &req.launcher.name);
+    // One of several attempts: its agent in the name tells them apart.
+    let base_slug = match &req.group {
+        Some(_) => format!(
+            "{}-{}",
+            slug(task.as_deref(), &req.launcher.name),
+            slug(None, &req.launcher.name)
+        ),
+        None => slug(task.as_deref(), &req.launcher.name),
+    };
     let repo = if req.worktree {
         git_toplevel(&req.cwd)
     } else {
@@ -491,6 +506,7 @@ pub(crate) fn create_in(
         dir,
         worktree,
         created_ms: crate::shell::tap::now_ms(),
+        group: req.group,
     };
     save_in(state, &session)?;
     Ok(session)
@@ -776,6 +792,7 @@ cyberterm +agent: run any coding agent in a worktree of its own
 
   cyberterm +agent                       the agent home: your agents and sessions
   cyberterm +agent <name> [task...]      start one in a new tab, in a new worktree
+  cyberterm +agent a,b,c <task...>       several agents on one task, to compare them
       --no-worktree                      run it in this directory instead
       --here                             run it in this terminal, not a new tab
   cyberterm +agent list                  sessions: running, changed files, commits
@@ -868,17 +885,47 @@ pub fn run_cli(args: &[String], cfg: &AgentsConfig) -> i32 {
     }
 }
 
+/// Opens a session in a new tab of the Cyberterm window behind `socket`.
+fn open_in_tab(socket: &Path, session: &Session) -> Result<(), String> {
+    let params = serde_json::json!({
+        "cwd": session.dir,
+        "title": session.title(),
+        "command": run_command(&session.id),
+        "flight_log": true,
+    });
+    match crate::control::call(socket, "new_tab", params) {
+        Ok(resp) => match resp.error {
+            None => Ok(()),
+            Some(e) => Err(e.message),
+        },
+        Err(e) => Err(format!("couldn't reach Cyberterm ({e})")),
+    }
+}
+
+/// `+agent <name>[,<name>...] [task]`: one session, or -- with several
+/// agents -- one attempt each at the same task, every one in its own
+/// worktree and tab, grouped so the Tower can compare them.
 fn start(name: &str, rest: &[String], cfg: &AgentsConfig) -> i32 {
     let launchers = launchers(cfg);
-    let Some(launcher) = find(&launchers, name) else {
-        eprintln!("❌ No agent called {name:?} here.");
-        if !launchers.is_empty() {
-            let names: Vec<&str> = launchers.iter().map(|l| l.name.as_str()).collect();
-            eprintln!("   Found: {}", names.join(", "));
+    let mut chosen = Vec::new();
+    for n in name.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+        match find(&launchers, n) {
+            Some(l) => chosen.push(l),
+            None => {
+                eprintln!("❌ No agent called {n:?} here.");
+                if !launchers.is_empty() {
+                    let names: Vec<&str> = launchers.iter().map(|l| l.name.as_str()).collect();
+                    eprintln!("   Found: {}", names.join(", "));
+                }
+                eprintln!("   Others can be added under [agents.launch] (cyberterm +agent help).");
+                return 1;
+            }
         }
-        eprintln!("   Others can be added under [agents.launch] (cyberterm +agent help).");
-        return 1;
-    };
+    }
+    if chosen.is_empty() {
+        eprintln!("usage: cyberterm +agent <name>[,<name>...] [task]");
+        return 2;
+    }
     let mut worktree = cfg.worktrees;
     let mut here = false;
     let mut words = Vec::new();
@@ -891,56 +938,114 @@ fn start(name: &str, rest: &[String], cfg: &AgentsConfig) -> i32 {
     }
     let task = Some(words.join(" ")).filter(|t| !t.trim().is_empty());
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let session = match create(
-        cfg,
-        Request {
-            launcher,
-            task,
-            cwd,
-            worktree,
-        },
-    ) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("❌ {e}");
+    let several = chosen.len() > 1;
+    let socket = (!here).then(crate::control::find_socket).flatten();
+
+    if several {
+        // Attempts at the same task must not share files, and each needs
+        // a tab.
+        let problem = if here {
+            Some("--here runs one agent; several each need a tab of their own")
+        } else if !worktree {
+            Some("several agents in one directory would trample each other: drop --no-worktree")
+        } else if git_toplevel(&cwd).is_none() {
+            Some("several agents at once need a git repository, so each gets its own worktree")
+        } else if socket.is_none() {
+            Some("several agents at once open in Cyberterm's tabs: run this inside Cyberterm")
+        } else {
+            None
+        };
+        if let Some(problem) = problem {
+            eprintln!("❌ {problem}");
             return 1;
         }
-    };
-    if let Some(w) = &session.worktree {
-        println!(
-            "◆ {} · worktree {} on {}",
-            session.label,
-            short(&w.path),
-            w.branch
-        );
-    }
-    let socket = (!here).then(crate::control::find_socket).flatten();
-    if let Some(socket) = socket {
-        let params = serde_json::json!({
-            "cwd": session.dir,
-            "title": session.title(),
-            "command": run_command(&session.id),
-            "flight_log": true,
-        });
-        match crate::control::call(&socket, "new_tab", params) {
-            Ok(resp) if resp.error.is_none() => {
-                println!("◆ Opened in a new tab ({})", session.id);
-                return 0;
-            }
-            Ok(resp) => eprintln!(
-                "couldn't open a tab ({}); running it here",
-                resp.error.map(|e| e.message).unwrap_or_default()
-            ),
-            Err(e) => eprintln!("couldn't reach Cyberterm ({e}); running it here"),
+        if task.is_none() {
+            eprintln!("❌ Give them the task to compare them on: cyberterm +agent {name} \"…\"");
+            return 2;
         }
     }
-    match exec(&session.id, cfg) {
+
+    let group = several.then(|| {
+        format!(
+            "{}-{}",
+            slug(task.as_deref(), "group"),
+            crate::shell::tap::now_ms()
+        )
+    });
+    let mut sessions = Vec::new();
+    for launcher in chosen {
+        match create(
+            cfg,
+            Request {
+                launcher,
+                task: task.clone(),
+                cwd: cwd.clone(),
+                worktree,
+                group: group.clone(),
+            },
+        ) {
+            Ok(s) => sessions.push(s),
+            Err(e) => {
+                eprintln!("❌ {}: {e}", launcher.label);
+                return 1;
+            }
+        }
+    }
+
+    for session in &sessions {
+        if let Some(w) = &session.worktree {
+            println!(
+                "◆ {} · worktree {} on {}",
+                session.label,
+                short(&w.path),
+                w.branch
+            );
+        }
+    }
+    if let Some(socket) = &socket {
+        let mut failed = false;
+        for session in &sessions {
+            match open_in_tab(socket, session) {
+                Ok(()) => println!("◆ Opened in a new tab ({})", session.id),
+                Err(e) if several => {
+                    eprintln!("❌ {}: couldn't open a tab ({e})", session.id);
+                    failed = true;
+                }
+                Err(e) => {
+                    eprintln!("couldn't open a tab ({e}); running it here");
+                    failed = true;
+                }
+            }
+        }
+        if several {
+            println!(
+                "◆ {} attempts at one task: compare them in the Tower (Ctrl+Shift+S), merge the best, discard the rest",
+                sessions.len()
+            );
+            return i32::from(failed);
+        }
+        if !failed {
+            return 0;
+        }
+    }
+    match exec(&sessions[0].id, cfg) {
         Ok(never) => match never {},
         Err(e) => {
             eprintln!("❌ {e}");
             1
         }
     }
+}
+
+/// The other sessions in `s`'s group that are still around.
+pub(crate) fn siblings_in(state: &Path, s: &Session) -> Vec<Session> {
+    let Some(group) = &s.group else {
+        return Vec::new();
+    };
+    sessions_in(state)
+        .into_iter()
+        .filter(|o| o.id != s.id && o.group.as_ref() == Some(group))
+        .collect()
 }
 
 /// Prints a session's flight log; with `follow`, keeps printing new
@@ -1066,6 +1171,7 @@ mod tests {
             dir: PathBuf::from("/"),
             worktree: None,
             created_ms: 0,
+            group: None,
         };
         assert_eq!(s.command_with(&[]), vec!["a", "--yolo", "do it"]);
         s.prompt = Prompt::Flag("-i".into());
@@ -1148,6 +1254,7 @@ mod tests {
             task: Some(task.into()),
             cwd: repo.join("src"),
             worktree: true,
+            group: None,
         };
 
         let a = create_in(&state, &cfg, req("fix the test")).unwrap();
@@ -1176,6 +1283,7 @@ mod tests {
                 task: None,
                 cwd: plain.clone(),
                 worktree: true,
+                group: None,
             },
         )
         .unwrap();

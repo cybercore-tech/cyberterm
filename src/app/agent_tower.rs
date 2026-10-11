@@ -21,8 +21,12 @@ use std::thread::JoinHandle;
 const REFRESH: Duration = Duration::from_secs(2);
 
 enum Ask {
-    Merge(String),
-    Discard(String),
+    /// The session, and whether its agent (done, but still open) is quit
+    /// first.
+    Merge(String, bool),
+    Discard(String, bool),
+    /// The other attempts at a task, after one was merged.
+    DiscardAll(Vec<String>),
 }
 
 /// The selected session's flight log.
@@ -43,6 +47,11 @@ pub(super) struct TowerUi {
     ask: Option<(Ask, String)>,
     /// A merge or discard running: what it is, and its result.
     job: Option<(String, JoinHandle<Result<String, String>>)>,
+    /// The other attempts at the task being merged: offered for
+    /// discarding once the merge is through.
+    after_merge: Vec<String>,
+    /// The sessions the running job removes, whose tabs then close.
+    job_ids: Vec<String>,
     /// Sessions being read.
     loading: Option<JoinHandle<Vec<SessionRow>>>,
     refreshed: Option<Instant>,
@@ -90,6 +99,8 @@ impl App {
                 log: None,
                 ask: None,
                 job: None,
+                after_merge: Vec::new(),
+                job_ids: Vec::new(),
                 loading: None,
                 refreshed: None,
             });
@@ -113,9 +124,38 @@ impl App {
             let result = handle
                 .join()
                 .unwrap_or_else(|_| Err(format!("{what} stopped unexpectedly")));
+            let (others, ids) = self
+                .tower
+                .as_mut()
+                .map(|ui| {
+                    (
+                        std::mem::take(&mut ui.after_merge),
+                        std::mem::take(&mut ui.job_ids),
+                    )
+                })
+                .unwrap_or_default();
+            if result.is_ok() {
+                for id in &ids {
+                    self.close_session_tab(id);
+                }
+            }
+            // The first line: the rest is for the command line.
+            let first = |t: &str| t.lines().next().unwrap_or_default().to_string();
             match result {
-                Ok(note) => self.lua_set_status(&note, false),
-                Err(e) => self.lua_set_status(&e, true),
+                Ok(note) if !others.is_empty() => {
+                    let n = others.len();
+                    let question = format!(
+                        "{}. Discard the other attempt{} ({})?",
+                        first(&note).trim_end_matches('.'),
+                        if n == 1 { "" } else { "s" },
+                        others.join(", ")
+                    );
+                    if let Some(ui) = &mut self.tower {
+                        ui.ask = Some((Ask::DiscardAll(others), question));
+                    }
+                }
+                Ok(note) => self.lua_set_status(&first(&note), false),
+                Err(e) => self.lua_set_status(&first(&e), true),
             }
             reload = true;
             changed = true;
@@ -219,15 +259,42 @@ impl App {
         }
     }
 
+    /// Closes the tab of a session that was merged or discarded, when
+    /// all that's left in it are idle shells (in a worktree that's gone).
+    /// Never the last tab.
+    fn close_session_tab(&mut self, id: &str) {
+        let Some(index) = self.tab_for_session(id) else {
+            return;
+        };
+        if self.tabs.len() <= 1 {
+            return;
+        }
+        let panes = self.tabs[index].root.panes();
+        let idle = panes.iter().all(|p| {
+            self.pane(*p).is_some_and(|pane| {
+                let shell = pane.session.pid();
+                crate::procs::foreground(shell).is_none_or(|fg| fg == shell)
+            })
+        });
+        if idle {
+            for p in panes {
+                self.close_pane(p);
+            }
+        }
+    }
+
     /// m: checks the merge (no changes yet) and asks.
     fn tower_merge(&mut self) {
         let Some(row) = self.tower_selected() else {
             return;
         };
         let (id, running) = (row.id.clone(), row.running);
+        // Finished its turn but still open: offer to quit it first.
+        let stop = running && row.mark == Mark::Done;
         let Ok(session) = crate::agent::load(&id) else {
             return;
         };
+        let running = running && !stop;
         let strategy = crate::agent_merge::Strategy::parse(&self.config.agents.merge)
             .unwrap_or(crate::agent_merge::Strategy::Squash);
         let plan = match crate::agent_merge::plan(&session, running, strategy) {
@@ -271,12 +338,28 @@ impl App {
                 if plan.uncommitted == 1 { "" } else { "s" }
             ));
         }
+        let quit = if stop {
+            format!("Quit {} and merge", session.label)
+        } else {
+            "Merge".to_string()
+        };
         let question = format!(
-            "Merge {id} into {} {how} ({what}), then remove its worktree?",
+            "{quit} {id} into {} {how} ({what}), then remove its worktree?",
             plan.onto
         );
         if let Some(ui) = &mut self.tower {
-            ui.ask = Some((Ask::Merge(id), question));
+            let group = ui
+                .rows
+                .iter()
+                .find(|r| r.id == id)
+                .and_then(|r| r.group.clone());
+            ui.after_merge = ui
+                .rows
+                .iter()
+                .filter(|r| r.id != id && group.is_some() && r.group == group)
+                .map(|r| r.id.clone())
+                .collect();
+            ui.ask = Some((Ask::Merge(id, stop), question));
         }
         self.lua_clear_status();
     }
@@ -286,8 +369,9 @@ impl App {
         let Some(row) = self.tower_selected() else {
             return;
         };
-        if row.running {
-            self.lua_set_status(&format!("{} is still running: quit it first", row.id), true);
+        let stop = row.running && row.mark == Mark::Done;
+        if row.running && !stop {
+            self.lua_set_status(&format!("{} is still working: quit it first", row.id), true);
             return;
         }
         let lost = match row.changes {
@@ -300,9 +384,13 @@ impl App {
             _ => "nothing it changed is kept".into(),
         };
         let id = row.id.clone();
-        let question = format!("Discard {id}? {lost}.");
+        let question = if stop {
+            format!("Quit {id}'s agent and discard it? {lost}.")
+        } else {
+            format!("Discard {id}? {lost}.")
+        };
         if let Some(ui) = &mut self.tower {
-            ui.ask = Some((Ask::Discard(id), question));
+            ui.ask = Some((Ask::Discard(id, stop), question));
         }
         self.lua_clear_status();
     }
@@ -313,18 +401,52 @@ impl App {
         let Some(ui) = &mut self.tower else {
             return;
         };
+        if !matches!(ask, Ask::Merge(..)) {
+            ui.after_merge.clear();
+        }
+        ui.job_ids = match &ask {
+            Ask::Merge(id, _) | Ask::Discard(id, _) => vec![id.clone()],
+            Ask::DiscardAll(ids) => ids.clone(),
+        };
         let state = crate::agent::state_dir();
         let (what, handle) = match ask {
-            Ask::Merge(id) => (
+            Ask::DiscardAll(ids) => (
+                format!("Discarding {}", ids.join(", ")),
+                std::thread::spawn(move || {
+                    let mut done = Vec::new();
+                    let mut failed = Vec::new();
+                    for id in &ids {
+                        // The user chose to drop them: open ones are quit.
+                        let discarded = crate::agent_merge::stop_agent(id)
+                            .and_then(|()| crate::agent_merge::discard_in(&state, id));
+                        match discarded {
+                            Ok(_) => done.push(id.clone()),
+                            Err(e) => failed.push(format!("{id}: {e}")),
+                        }
+                    }
+                    if failed.is_empty() {
+                        Ok(format!("Discarded {}", done.join(", ")))
+                    } else {
+                        Err(failed.join("; "))
+                    }
+                }),
+            ),
+            Ask::Merge(id, stop) => (
                 format!("Merging {id}"),
                 std::thread::spawn(move || {
+                    if stop {
+                        crate::agent_merge::stop_agent(&id)?;
+                    }
                     crate::agent_merge::merge_in(&state, &id, strategy, false)
                         .map(|note| format!("{id}: {note}"))
                 }),
             ),
-            Ask::Discard(id) => (
+            Ask::Discard(id, stop) => (
                 format!("Discarding {id}"),
                 std::thread::spawn(move || {
+                    if stop {
+                        crate::agent_merge::stop_agent(&id)?;
+                    }
                     crate::agent_merge::discard_in(&state, &id).map(|note| format!("{id}: {note}"))
                 }),
             ),
@@ -354,6 +476,8 @@ impl App {
         if let Some((ask, _)) = ui.ask.take() {
             if ch == "y" {
                 self.tower_run(ask);
+            } else {
+                ui.after_merge.clear();
             }
             self.request_redraw();
             return true;

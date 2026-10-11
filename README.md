@@ -307,6 +307,7 @@ Run any coding agent in a git worktree of its own, in a tab of its own:
 ```bash
 cyberterm +agent claude fix the flaky login test   # or codex, gemini, copilot, opencode, crush, ...
 cyberterm +agent                                   # the agent home: your agents and sessions at a glance
+cyberterm +agent claude,codex,gemini fix the flaky login test   # several agents on one task, to compare
 cyberterm +agent merge fix-the-flaky-login         # bring its work into your branch as one commit
 cyberterm +agent discard fix-the-flaky-login       # or throw it away
 ```
@@ -372,6 +373,20 @@ cyberterm +agent log fix-the-flaky-login -o -f   # with output, following live
   - **d** discards it, after asking.
   - **n** starts a new agent.
 - **It keeps up:** sessions are re-read every couple of seconds while it's open, and merges run in the background, so a slow commit hook never freezes the window.
+- **Finished but still open:** most agents stay open after they finish. For a session marked ✓ done, m and d offer to quit the agent first ("Quit Claude Code and merge …?"). One that's still working is never stopped. Afterwards its tab closes, if all that's left in it is an idle shell.
+
+#### Several agents on one task
+
+Give the same task to several agents and keep the best result:
+
+```bash
+cyberterm +agent claude,codex,gemini fix the flaky login test
+```
+
+- **Separate attempts:** each agent gets its own worktree and tab (`fix-the-flaky-login-claude`, `…-codex`, …). The same agent twice works too (`claude,claude`).
+- **Side by side:** the Tower joins a task's attempts with a bar down their left edge, so their changes, commits and flight logs can be compared.
+- **Keep one:** merging one asks whether to discard the others, quitting any that are still open. From the command line, `+agent merge` names the leftover attempts and the `+agent discard` command for them.
+- **Inside Cyberterm, in a git repository:** several attempts at once need their own tabs and worktrees.
 
 It works with any agent, at the level of detail each one allows:
 

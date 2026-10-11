@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Added
+- **Several agents on one task** (`cyberterm +agent claude,codex,gemini "task"`): one attempt each, in their own worktrees and tabs, grouped in the Tower so you can compare them. Merging one offers to discard the rest.
+- **Quit and merge:** for an agent that finished but is still open, the Tower's merge and discard offer to quit it first, then close its tab.
 - **The Tower** (`Ctrl+Shift+S`): every agent session at once.
   - **What it shows:** the sessions on the left (state, agent, branch, lines changed); the selected one's flight log on the right.
   - **Keys:** **↵** jumps to its tab, **c** opens its Changes, **m** merges it, **d** discards it (both after asking), **n** starts a new agent.
