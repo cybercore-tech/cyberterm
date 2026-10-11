@@ -41,6 +41,10 @@ pub struct SessionRow {
     /// Lines added and removed, and files changed, against where it began;
     /// `None` when that can't be told (no worktree, or it's gone).
     pub changes: Option<(usize, usize, usize)>,
+    /// Its agent is still running.
+    pub running: bool,
+    /// Commits on its branch since it started.
+    pub commits: usize,
 }
 
 pub struct Home {
@@ -720,12 +724,43 @@ pub fn render(h: &Home, cols: usize, p: &Palette, mode: Mode) -> String {
 // Gathering it
 // ----------------------------------------------------------------------
 
-fn mark(state: State, running: bool) -> Mark {
+pub fn mark(state: State, running: bool) -> Mark {
     match (state, running) {
         (State::Done, _) => Mark::Done,
         (State::Waiting, true) => Mark::Waiting,
         (_, true) => Mark::Working,
         _ => Mark::Stopped,
+    }
+}
+
+/// A session at a glance (for the agent home and the Tower): its state,
+/// where it works and what it has changed. Runs git, so it takes a moment.
+pub fn session_row(s: &crate::agent::Session, now: u64) -> SessionRow {
+    let st = crate::agent::status(s);
+    let events = crate::flight_log::read(&crate::flight_log::log_path(&s.id));
+    let summary = crate::flight_log::summary(&crate::flight_log::timeline(&events));
+    let changes = s
+        .worktree
+        .as_ref()
+        .filter(|_| !st.worktree_missing)
+        .and_then(|w| crate::changes::collect(&w.path, &w.base).ok())
+        .map(|c| {
+            let (a, r) = c.totals();
+            (a, r, c.files.len())
+        });
+    SessionRow {
+        id: s.id.clone(),
+        agent: s.agent.clone(),
+        mark: mark(summary.state, st.running),
+        idle_ms: (summary.last_t > 0).then(|| now.saturating_sub(summary.last_t)),
+        place: match &s.worktree {
+            Some(_) if st.worktree_missing => "worktree gone".into(),
+            Some(w) => w.branch.clone(),
+            None => crate::agent::short(&s.dir),
+        },
+        changes,
+        running: st.running,
+        commits: st.commits,
     }
 }
 
@@ -751,32 +786,7 @@ pub fn gather(cfg: &crate::config::CyberConfig, theme: &str) -> Home {
     let sessions = all
         .iter()
         .take(MAX_SESSIONS)
-        .map(|s| {
-            let st = crate::agent::status(s);
-            let events = crate::flight_log::read(&crate::flight_log::log_path(&s.id));
-            let summary = crate::flight_log::summary(&crate::flight_log::timeline(&events));
-            let changes = s
-                .worktree
-                .as_ref()
-                .filter(|_| !st.worktree_missing)
-                .and_then(|w| crate::changes::collect(&w.path, &w.base).ok())
-                .map(|c| {
-                    let (a, r) = c.totals();
-                    (a, r, c.files.len())
-                });
-            SessionRow {
-                id: s.id.clone(),
-                agent: s.agent.clone(),
-                mark: mark(summary.state, st.running),
-                idle_ms: (summary.last_t > 0).then(|| now.saturating_sub(summary.last_t)),
-                place: match &s.worktree {
-                    Some(_) if st.worktree_missing => "worktree gone".into(),
-                    Some(w) => w.branch.clone(),
-                    None => crate::agent::short(&s.dir),
-                },
-                changes,
-            }
-        })
+        .map(|s| session_row(s, now))
         .collect();
 
     let (bindings, _) = Bindings::new(&cfg.keybindings, cfg.keyboard.leader.as_deref());
@@ -872,6 +882,8 @@ mod tests {
                     idle_ms: Some(4 * 60_000 + 10),
                     place: "agent/fix-login".into(),
                     changes: Some((42, 7, 3)),
+                    running: true,
+                    commits: 1,
                 },
                 SessionRow {
                     id: "add-auth".into(),
@@ -880,6 +892,8 @@ mod tests {
                     idle_ms: None,
                     place: "agent/add-auth".into(),
                     changes: Some((0, 0, 0)),
+                    running: true,
+                    commits: 0,
                 },
             ],
             more: 2,

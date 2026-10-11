@@ -66,6 +66,7 @@ pub enum Action {
     CommandPalette,
     FlightLog,
     AgentChanges,
+    Tower,
 }
 
 use Direction::{Down, Left, Right, Up};
@@ -300,6 +301,11 @@ pub const ACTIONS: &[(Action, &str, &str)] = &[
         "agent_changes",
         "Changes: what the agent in this tab changed",
     ),
+    (
+        Action::Tower,
+        "tower",
+        "Tower: every agent session at once; jump, review, merge or discard",
+    ),
 ];
 
 pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
@@ -375,6 +381,7 @@ pub const DEFAULT_BINDINGS: &[(&str, &str)] = &[
     ("ctrl+shift+p", "command_palette"),
     ("ctrl+shift+l", "flight_log"),
     ("ctrl+shift+m", "agent_changes"),
+    ("ctrl+shift+s", "tower"),
 ];
 
 /// Keys after the leader, when one is configured: tmux's own defaults.

@@ -44,6 +44,7 @@ use crate::ui::context_menu;
 
 mod agent_changes;
 mod agent_tabs;
+mod agent_tower;
 mod agents;
 mod ai;
 mod blocks;
@@ -245,6 +246,7 @@ pub struct App {
     agents: agents::AgentState,
     flight: agent_tabs::FlightState,
     changes_ui: Option<agent_changes::ChangesUi>,
+    tower: Option<agent_tower::TowerUi>,
     /// The AI panel (Ask / Explain), and the last request number.
     ai_panel: Option<ai::AiPanel>,
     ai_seq: u64,
@@ -342,6 +344,7 @@ impl App {
             agents: agents::AgentState::default(),
             flight: agent_tabs::FlightState::default(),
             changes_ui: None,
+            tower: None,
             ai_panel: None,
             ai_seq: 0,
             danger_confirm: None,
@@ -799,8 +802,9 @@ impl App {
         let tab = self.active();
         let multiple = tab.is_some_and(|t| t.root.panes().len() > 1 && !t.zoomed);
 
-        // The Changes view covers the tab; its panes aren't drawn.
-        let rects = if self.changes_open() {
+        // The Changes view and the Tower cover the tab; its panes aren't
+        // drawn.
+        let rects = if self.changes_open() || self.tower_open() {
             Vec::new()
         } else {
             self.visible_rects()
@@ -913,7 +917,7 @@ impl App {
 
         // Dividers: a one-pixel line in the middle of each gap, in the
         // accent color while broadcasting.
-        if let Some(tab) = tab.filter(|t| !t.zoomed && !self.changes_open()) {
+        if let Some(tab) = tab.filter(|t| !t.zoomed && !self.changes_open() && !self.tower_open()) {
             let area = self.tab_area(gpu, tab.id);
             let line = (gpu.window.scale_factor() as f32).round().max(1.0);
             let color = if tab.broadcast { accent } else { dim_color };
@@ -941,6 +945,8 @@ impl App {
 
         if self.changes_open() {
             self.draw_changes(gpu, &mut list);
+        } else if self.tower_open() {
+            self.draw_tower(gpu, &mut list);
         } else {
             self.draw_flight_panel(gpu, &mut list);
         }
@@ -1497,6 +1503,7 @@ impl ApplicationHandler<UserEvent> for App {
             self.refresh_ports();
             self.refresh_agent_panes();
             self.refresh_changes(false);
+            self.refresh_tower(false);
             self.lua_poll();
         }
         let mut next = self.last_poll + POLL_INTERVAL;

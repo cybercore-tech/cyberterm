@@ -198,6 +198,8 @@ pub fn build(v: &View<'_>, cols: usize, rows: usize, c: &Colors) -> Frame {
 
     let footer = if v.focused {
         " ↑↓ Enter output · y copy · c changes · Esc back".to_string()
+    } else if v.key.is_empty() {
+        String::new()
     } else {
         format!(" {} focus · again to close", v.key)
     };

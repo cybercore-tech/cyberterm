@@ -91,6 +91,7 @@ cyberterm +agent <name> [task]     # run a coding agent in its own worktree and 
 | `Ctrl+Shift+,` | Theme picker |
 | `Ctrl+Shift+L` | Flight log: what the agent in this tab did |
 | `Ctrl+Shift+M` | Changes: what the agent in this tab changed |
+| `Ctrl+Shift+S` | Tower: every agent session at once; jump, review, merge or discard |
 | `Ctrl+Shift+R` | Reload the config now |
 
 Rebind or free any of them under `[keybindings]` (`"ctrl+shift+k" = "none"`
@@ -358,6 +359,19 @@ cyberterm +agent log fix-the-flaky-login -o -f   # with output, following live
 - **Keys:** **↑↓** choose a file, **PgUp/PgDn** scroll, **e** opens it in your editor at the first change, **y** copies its path.
 - **r puts a file back** the way it was when the agent started, after asking. A file the agent created is removed.
 - **It's plain git** in the worktree, so it works the same for every agent, and your own diff settings don't change it.
+
+#### Tower
+
+`Ctrl+Shift+S` shows every agent session at once, over the tab: the sessions on the left, the selected one's flight log on the right.
+
+- **At a glance:** each session's state (◆ working, ◆! needs you, ✓ done, ○ stopped), its agent, how long since it last did something, its branch, and what it changed (`+`/`−` lines, files, commits). The header counts the ones that need you.
+- **Keys:**
+  - **↵** jumps to the session's tab, or opens a shell in its worktree.
+  - **c** opens its Changes (Esc comes back to the Tower).
+  - **m** merges its work into the branch it started from (`+agent merge`). It checks first and asks, showing what it will do.
+  - **d** discards it, after asking.
+  - **n** starts a new agent.
+- **It keeps up:** sessions are re-read every couple of seconds while it's open, and merges run in the background, so a slow commit hook never freezes the window.
 
 It works with any agent, at the level of detail each one allows:
 
