@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Added
+- **Merge or discard an agent's work** (`cyberterm +agent merge <id>`, `cyberterm +agent discard <id>`).
+  - **Merge** brings the session's branch into the branch it started from: one squashed commit by default, or a merge commit (`--merge`), or a fast-forward (`--ff`).
+  - **Safe:** it checks everything first and changes nothing if it can't finish (agent still running, your checkout busy or on another branch, conflicts found with `git merge-tree`). `--check` previews.
+  - **Discard** removes the worktree, branch and session after asking.
 - **Copilot CLI, Cursor and Hermes report to the flight log** like Claude Code, Codex and Gemini CLI do: prompts, command output and exit codes, edits, other tools, and when they need you or are done. Each appears lit in the agent home once it reports.
   - **Copilot CLI:** hooks per session, through a plugin of Cyberterm's own; nothing to set up.
   - **Cursor:** `cyberterm +agent setup cursor` adds them to `~/.cursor/hooks.json`.

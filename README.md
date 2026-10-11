@@ -306,7 +306,8 @@ Run any coding agent in a git worktree of its own, in a tab of its own:
 ```bash
 cyberterm +agent claude fix the flaky login test   # or codex, gemini, copilot, opencode, crush, ...
 cyberterm +agent                                   # the agent home: your agents and sessions at a glance
-cyberterm +agent rm fix-the-flaky-login            # remove it and its worktree when you're done
+cyberterm +agent merge fix-the-flaky-login         # bring its work into your branch as one commit
+cyberterm +agent discard fix-the-flaky-login       # or throw it away
 ```
 
 - **Any agent:**
@@ -320,6 +321,11 @@ cyberterm +agent rm fix-the-flaky-login            # remove it and its worktree 
 - **Recognised wherever it runs:**
   - Agent tabs are titled and badged (`◆ Claude Code · fix-the-flaky-login`).
   - This works for daemon sessions too: close the window and the agent keeps working, and reattaching picks it back up.
+- **Merge or discard:**
+  - `+agent merge <id>` brings the session's work into the branch it started from: one squashed commit titled with the task by default, or `--merge` (a merge commit) or `--ff` (fast-forward). Anything the agent left uncommitted is committed onto its branch first. Then the worktree, branch and session go (`--keep` keeps them).
+  - **Checked before anything changes:** it won't start while the agent runs, while your checkout is on another branch or has uncommitted changes, or when the work conflicts. Conflicts are found with `git merge-tree`, which touches no files, and listed by name.
+  - `--check` shows what a merge would do without doing it. `[agents] merge = "merge"` or `"ff"` changes the default.
+  - `+agent discard <id>` throws a session's work away (worktree, branch and session) after asking; `--yes` skips the question.
 - **Careful cleanup:** `+agent rm` refuses while the agent runs or while its worktree has uncommitted changes or commits (`--force` overrides). It deletes the branch only when nothing was committed on it.
 
 #### Flight log
